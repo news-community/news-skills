@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue or a leaked API key
+    url: https://github.com/news-community/alaska-news-skills/security/advisories/new
+    about: Do not open a public issue. Revoke a leaked key yourself at alaskanews.com/profile/settings first.
+  - name: A correction to Alaska News reporting
+    url: https://alaskanews.com
+    about: Editorial corrections belong with the newsroom, not with this client.

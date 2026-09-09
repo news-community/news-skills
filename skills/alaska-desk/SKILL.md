@@ -4,8 +4,8 @@ description: >-
   Read-only research client for the alaskanews.com public API. Pull published Alaska News
   articles, meeting transcripts, public events, and prior coverage into your own work, under
   the site's stated terms. For external Alaska creators: community journalists, bloggers, and
-  civic writers. Use when you want to build on Alaska News reporting, cite prior coverage, or
-  work a story across the five Ws.
+  civic writers. Use when you want to build on Alaska News reporting, cite prior coverage, find
+  upcoming public meetings, hearings and comment deadlines, or work a story across the five Ws.
 ---
 
 # alaska-desk
@@ -27,7 +27,7 @@ part of this tool. alaska-desk is for people building on Alaska News reporting f
 |---|---|
 | **Audience** | external Alaska creators, one per key |
 | **Direction** | READ ONLY. No `PATCH` / `PUT` / `DELETE`; its only `POST` is the read-only RAG query. A test enforces this. |
-| **Auth** | **your own** `cn_` API key (`ALASKA_DESK_API_KEY`). `digest` needs none. |
+| **Auth** | **your own** `cn_` API key (`ALASKA_DESK_API_KEY`), ideally created **read-only**. `digest` needs none. |
 | **Output** | rendered markdown by default (paste into your draft), `--json` for raw. Every response carries the site's usage terms. |
 | **Runs on** | [`scripts/alaska_desk.py`](scripts/alaska_desk.py), Python 3, standard library only, no dependencies. |
 
@@ -52,7 +52,17 @@ for using it. If you generate content from an article, name Alaska News and link
 
 ## Auth: your own key, and only what it reaches
 
-Create a key at `alaskanews.com/profile/settings`, then either export it (works from anywhere):
+Create a key at `alaskanews.com/profile/settings`. **Tick "Read-only" when you create it.**
+
+That checkbox is the single most useful thing on this page for you. This client never writes, but
+that is a promise made by code you would have to read; a read-only key is enforced by the server,
+which rejects every `POST`/`PUT`/`PATCH`/`DELETE` before a handler runs. Same reach for everything
+here, and a key that cannot damage the newsroom even if you leak it, paste it into the wrong
+terminal, or hand it to an agent that turns out to be more creative than you wanted. The one
+exception is `rag`, whose read-only query is an HTTP `POST`, so tick read-only only if you can live
+without that mode.
+
+Then either export the key (works from anywhere):
 
 ```bash
 export ALASKA_DESK_API_KEY=cn_...
@@ -64,26 +74,41 @@ or drop it in a gitignored `.env.local` next to the script (or in your project r
 echo 'ALASKA_DESK_API_KEY=cn_...' >> scripts/.env.local
 ```
 
-Access is tiered on the platform side, and your key may not reach everything. The table below is
-**live-verified against a real external `cn_` key (2026-07-23)**, so it reflects what an external
-consumer actually gets, not what the docs imply:
+Access is tiered on the platform side, and your key may not reach everything.
 
-| Mode | This external key got | Note |
+| Mode | Reach | Note |
 |---|---|---|
-| `digest` | **OK** | public recent-stories markdown, no key |
-| `search` | **OK** | multi-corpus; a plain external key even saw external-documents + social-post here |
-| `angles` | **OK (via search)** | discovery scaffold; runs on the verified `/search` surface |
-| `article` | **OK** | URL/slug needs no key; `id` is keyed |
-| `transcript` | **OK** | full meeting transcript with speakers + timestamps |
-| `events` | **OK** | via the events search corpus |
-| `rag` | **403 forbidden** | prior-coverage RAG needs a higher role than an external consumer key; expect this to be unavailable to you |
-| `clip` | **no access** | browsing the clip library needs an editor role external keys lack; only a KNOWN clip id streams (public) |
+| `digest` | **public** | recent-stories markdown, no key. Re-verified 2026-09-09 |
+| `search` | **any valid key** | six corpora; `external_documents` and `social_post` are editor/admin only |
+| `angles` | **any valid key** | discovery scaffold; runs on the `/search` surface |
+| `article` | **public by URL/slug**, keyed by id | the id form returns the richer record |
+| `transcript` | **any valid key** | full meeting transcript with speakers + timestamps |
+| `events` | **any valid key** | `GET /calendar`, date-ranged. Re-verified 2026-09-09 |
+| `communities` | **any valid key** | the slugs `--community` accepts |
+| `browse` | **any valid key** | the published article list; `--tag` for one beat |
+| `people` / `person` | **any valid key** | speaker directory, and one actor's coverage |
+| `topics` / `tags` | **any valid key** | beats, and the subject vocabulary inside them |
+| `rag` | **role-gated** | an external consumer key saw 403 on 2026-07-23; slow (~1-2 min) where allowed |
+| `clip` | **id only** | resolves a known id to its public MP4 URL. You cannot BROWSE clips: see below |
 
-So the reliable external surface is **digest, search, angles, article, transcript, events**. `rag`
-and `clip` are role-gated and most external keys will not reach them.
+**Two endpoints are not role gates and no upgrade reaches them.** `GET /clips` (browse) and
+`GET /transcripts/search` authenticate by **cookie session only**: they read the browser's Supabase
+session rather than going through the API-key path, so they return 401 to *every* `cn_` key,
+including an admin's. Verified 2026-09-09 against an elevated newsroom key: both 401. This
+previously read as "needs an editor role", which sent people to ask for a role that could not have
+helped. Use `search --corpus transcripts` instead of `transcripts/search`, and get clip ids from
+`search` or an article.
+
+**A note on this table's provenance.** The per-mode rows marked 2026-07-23 came from a real external
+consumer key. The 2026-09-09 re-verification ran against an **elevated newsroom key**, which can
+confirm that an endpoint exists, answers, and returns the shape this client renders, but *cannot*
+confirm what a plain external key reaches. Rows are worded to keep those two claims apart. An
+earlier version of this table asserted that a plain external key saw the `external_documents` and
+`social_post` corpora; the platform has gated both to editor/admin since 2026-06-09, so that line
+was describing either a privileged key or a bug, and it has been removed rather than restated.
 
 **Run `check` first.** It probes each surface and tells you what your key actually reaches, before
-you build a workflow on something it can't touch:
+you build a workflow on something it can't touch. It also names the endpoints no key reaches:
 
 ```bash
 python3 scripts/alaska_desk.py check
@@ -95,17 +120,52 @@ python3 scripts/alaska_desk.py check
 
 ```bash
 python3 scripts/alaska_desk.py digest                              # recent stories (no key)
-python3 scripts/alaska_desk.py search "port of alaska settlement"  # --corpus articles,transcripts,events
+python3 scripts/alaska_desk.py browse --sort new                   # what has been PUBLISHED (no query)
+python3 scripts/alaska_desk.py search "port of alaska settlement"  # --corpus, --since, --until
 python3 scripts/alaska_desk.py angles "port of alaska" --intent track  # discovery: fix 2 Ws, expand the rest
 python3 scripts/alaska_desk.py article <id | slug | url>           # full article
 python3 scripts/alaska_desk.py transcript <source-id>              # meeting transcript
-python3 scripts/alaska_desk.py events "assembly"                   # upcoming hearings/meetings
-python3 scripts/alaska_desk.py rag "public comment deadlines"      # quotes + people + prior coverage
-python3 scripts/alaska_desk.py clip <clip-id>                      # stream a known clip
+python3 scripts/alaska_desk.py events                              # what is coming UP (next 30 days)
+python3 scripts/alaska_desk.py rag "public comment deadlines"      # answer + traceable citations
+python3 scripts/alaska_desk.py clip <clip-id>                      # resolve a known clip id to its MP4 URL
+python3 scripts/alaska_desk.py communities                         # slugs valid for --community
+python3 scripts/alaska_desk.py people "dunleavy"                   # the Who axis: named speakers
+python3 scripts/alaska_desk.py person <person-id>                  # one actor + the coverage they appear in
+python3 scripts/alaska_desk.py topics                              # the broad beats
+python3 scripts/alaska_desk.py tags "port" --category organization # the subject vocabulary
 ```
 
-Add `--json` for raw responses, `--community <slug>` to target a community other than
-`alaska-news`.
+**Two vocabularies, and they are not the same.** `topics` is the ~15 broad beats (Health, Education,
+Government). `tags` is the specific subject vocabulary inside them (Ambler Road, Alaska LNG, Cook
+Inlet gas), categorised as `organization`, `topic` or `location`. A tag slug is what `browse --tag`
+takes. Note that `/topics` currently reports **0 articles for every beat**: those stats are not being
+populated, so the client suppresses them rather than printing a zero that reads as "no coverage".
+
+**`browse` vs `search`.** `search` answers "what do you have about X". `browse` answers "what has
+been published", which is the question you ask before you know what X is. `--sort` takes
+`new`/`hot`/`top`/`popular`/`timeline`/`alphabetical`, and `--tag <slug>` lists a single beat.
+
+**Paging.** Every list mode takes `--limit` and `--offset`, and prints `showing 1-20 of 340` with the
+next `--offset` when there is more. A page that quietly drops the rest is how you conclude there are
+three of something when there are ninety.
+
+Add `--json` for raw responses, `--community <slug>` to target a community other than `alaska-news`
+(run `communities` to see which slugs exist).
+
+**The When axis: `--since` / `--until`.** `search` and `angles` both take `--since YYYY-MM-DD` and
+`--until YYYY-MM-DD`, which map to the API's `date_from` / `date_to` on the articles corpus. This is
+the only one of the five Ws the server can filter on, and it is the axis the `angles` intents talk
+about holding or expanding, so `--intent precedent --until 2020-01-01` is how you actually ask the
+question that intent describes. Result lines carry the date for the same reason: you cannot check
+the two-axis corroboration rule below against results whose dates are hidden.
+
+**`events` is forward-looking.** It reads `GET /calendar`, whose window starts now and runs 30 days
+(`--days` to change it, `--type meeting|public_notice|community_event|class` to narrow). It used to
+run `search --corpus events`, which ranks by relevance rather than date: on 2026-09-09 that returned
+15 of 15 meetings **already past** under a heading saying "upcoming", which is the one thing a
+hearing listing must never do. To search events by relevance across all time, including past ones,
+use `search "<q>" --corpus events`. `/calendar` has no full-text parameter, so a query argument to
+`events` filters the window client-side on title and location.
 
 ---
 
@@ -170,19 +230,46 @@ phrase with no matching published story behind it.
 
 ---
 
-## Honest limits (as of 2026-07-23)
+## Honest limits (as of 2026-09-09)
 
-- **Live-verified (2026-07-23).** Run against a real external `cn_` key: `digest`, `search`, `article`,
-  `transcript`, and `events` all return and render correctly. `rag` returned 403 and `clip` browse is
-  role-gated, so both are unavailable to a plain external key. The renders fall back to raw JSON if a
-  shape ever changes; `--json` always gives you the raw payload.
-- **`rag` and `clip` need a higher role.** An external consumer key reaches the read surface
-  (articles/transcripts/events/search) but not the RAG endpoint or the clip library. Run `check` to
-  confirm your own key's reach.
-- **`angles`** rides the already-verified `/search` surface (one framed GET per run), so any valid key
-  that reaches `search` reaches it. Its suggested `rag` follow-ups inherit rag's role limit above.
+- **What was verified, and with which key.** On **2026-07-23** every mode was run against a real
+  external `cn_` key: `digest`, `search`, `article`, `transcript` and `events` returned and rendered;
+  `rag` returned 403. On **2026-09-09** the modes were re-run against an **elevated newsroom key**,
+  which re-confirms that each endpoint exists, answers, and returns the shape this client renders,
+  but says nothing about what a plain external key reaches. Where those two claims differ, the table
+  above keeps them apart. Run `check` for the only answer that is about *your* key.
+- **`rag` is role-gated and slow.** An external key saw 403. Where it is allowed, it synthesizes an
+  answer over retrieved passages and measured **84 seconds** on 2026-09-09, so the client gives it a
+  180s budget; a timeout is now reported as a timeout, not as "unreachable". Quote its **citations**
+  (each carries a verbatim excerpt and a url), never its synthesized paragraph: the paragraph is a
+  summary of someone else's reporting and is not itself attributable.
+- **You cannot browse clips or use `/transcripts/search` with any key.** Both are cookie-session
+  endpoints, not role gates. See the auth section above.
+- **`angles`** rides the `/search` surface (one framed GET per run), so any valid key that reaches
+  `search` reaches it. Its suggested `rag` follow-ups inherit rag's role limit.
+- **Rate limits.** 300 reads/min per user (and 180 writes/min, which nothing here uses). A 429 is a
+  back-off, not a permission problem.
+- **`--json` is the stable machine surface.** Renderers fall back to raw JSON if a payload shape ever
+  changes, and `--json` always gives you the untouched payload.
 - **This is not a submission tool.** If you want your work published *on* Alaska News, that is a
   newsroom workflow, not this.
+
+### Not covered here, deliberately
+
+**`GET /feed` is not wrapped.** It returns byte-identical results to `browse --sort new` (compared
+directly on 2026-09-09) and accepts no `community` parameter, so for a consumer targeting a community
+it is the same mode with strictly less reach. A test pins its absence, so anyone adding it later has
+to delete that test and read this first.
+
+**`person` reports "appears in", not "quoted in", and the distinction is load-bearing.**
+`/persons/<id>/articles` returns a UNION: articles where an attribution matched the person's name,
+and articles structurally linked to them. Only the first kind carries a verbatim excerpt. Rows with a
+quote are marked `quoted (Nx)`; when a whole page has none, the client says so, because "Dunleavy
+appears in this piece" and "Dunleavy said this in this piece" are different claims and only one of
+them is quotable. Open the article and confirm before you attribute words to anyone.
+
+Everything else on the read surface that a consumer key reaches is now wrapped. What remains
+unwrapped is write-side or editor-only, and out of scope by design.
 
 ---
 
@@ -193,6 +280,12 @@ pip install pytest
 python3 -m pytest scripts/test_alaska_desk.py -q   # offline; no key, no network
 ```
 
-The tests cover arg parsing, the read-only contract (no write verbs; the only POST is the read-only
-RAG query), the HATEOAS footer, and the five-Ws intent grid. Only the single live API call per mode is
+No key and no network required. The tests cover arg parsing, the read-only contract (no write
+verbs; the only POST is the read-only RAG query), the HATEOAS footer, the five-Ws intent grid, and a
+regression guard for each defect found in the 2026-09-09 audit: that `events` queries the
+date-ranged endpoint and opens its window at now, that a non-JSON reply raises a guided error rather
+than a decode traceback, that a timeout is not reported as unreachable, that `--since`/`--until`
+reach the API as `date_from`/`date_to`, that the corpus help names all eight corpora, that
+cookie-session endpoints are described as unreachable-by-any-key rather than role-gated, and that
+`rag` and `article <id>` render instead of dumping JSON. Only the single live API call per mode is
 untestable without a key, which is why it is kept as thin as possible.

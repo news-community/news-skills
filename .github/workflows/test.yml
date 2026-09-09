@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The suite was run locally on 3.11, 3.13 and 3.14. 3.9 is in this matrix
+        # to TEST the claimed floor, not to restate it: the one version-sensitive
+        # branch is socket.timeout vs TimeoutError, which are the same class only
+        # from 3.10, and CI is the first thing that actually exercises 3.9.
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install pytest
+      - name: Run the offline suite
+        run: python -m pytest skills/alaska-desk/scripts/test_alaska_desk.py -q
+      - name: The read-only contract, checked without importing anything
+        # A grep, not a test: if the module ever fails to import, the in-suite
+        # version of this check would be skipped rather than failed.
+        run: |
+          ! grep -nE '"(PATCH|PUT|DELETE)"' skills/alaska-desk/scripts/alaska_desk.py

@@ -1,4 +1,4 @@
-# Alaska News — public API toolkit
+# Alaska News: public API toolkit
 
 Open tools for building on [Alaska News](https://alaskanews.com) reporting.
 
@@ -13,7 +13,7 @@ back to the platform.
 
 | Skill | What it does |
 |-------|--------------|
-| [`skills/alaska-desk`](skills/alaska-desk/SKILL.md) | A read-only research client over the alaskanews.com public API: `digest`, `search`, `angles` (five-Ws discovery), `article`, `transcript`, `events`, `rag`, `clip`, and a `check` that reports what your key can reach. |
+| [`skills/alaska-desk`](skills/alaska-desk/SKILL.md) | A read-only research client over the alaskanews.com public API. 15 modes: `digest` and `browse` (what's published), `search` and `angles` (five-Ws discovery), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clip`, `communities`, and a `check` that reports what your key can reach. |
 
 ## Quickstart
 
@@ -21,19 +21,41 @@ back to the platform.
 # 1. Recent stories, no key needed:
 python3 skills/alaska-desk/scripts/alaska_desk.py digest
 
-# 2. Get a key at alaskanews.com/profile/settings, then:
+# 2. Get a key at alaskanews.com/profile/settings -- TICK "READ-ONLY" -- then:
 export ALASKA_DESK_API_KEY=cn_...
 
 # 3. See what your key reaches:
 python3 skills/alaska-desk/scripts/alaska_desk.py check
 
 # 4. Search, then work a story across the five Ws:
-python3 skills/alaska-desk/scripts/alaska_desk.py search "port of alaska settlement"
+python3 skills/alaska-desk/scripts/alaska_desk.py search "port of alaska settlement" --since 2026-01-01
 python3 skills/alaska-desk/scripts/alaska_desk.py angles "port of alaska" --intent track
+
+# 5. What can you still show up to, or still file comment on?
+python3 skills/alaska-desk/scripts/alaska_desk.py events --days 14
+
+# 6. Work an actor, or a beat:
+python3 skills/alaska-desk/scripts/alaska_desk.py people "dunleavy"
+python3 skills/alaska-desk/scripts/alaska_desk.py browse --tag transportation
 ```
 
-Python 3, standard library only. No dependencies to install for the tool itself. See
+**Tick "Read-only" when you create the key.** Nothing here writes, but a read-only key is enforced
+by the server rather than promised by code you would have to read: it reaches everything in this
+toolkit and cannot damage the newsroom if it leaks. (The one exception is `rag`, whose read-only
+query is an HTTP `POST`.)
+
+Python 3, standard library only. No dependencies to install for the tool itself. Verified on 3.11,
+3.13 and 3.14; CI also runs 3.9, the intended floor. See
 [`skills/alaska-desk/SKILL.md`](skills/alaska-desk/SKILL.md) for the full guide.
+
+## Tests
+
+```bash
+pip install pytest
+python3 -m pytest skills/alaska-desk/scripts/test_alaska_desk.py -q
+```
+
+Offline: no key and no network required. CI runs them on every push, across Python 3.9-3.13.
 
 ## Using it as an agent skill
 
