@@ -397,11 +397,31 @@ class TestKeyBlindEndpointsAreNamedAsSuch:
     to request a role that cannot help."""
 
     def test_check_lists_them_as_unreachable_by_any_key(self):
-        r = run("check")
-        if "unreachable" in (r.stdout + r.stderr):
-            pytest.skip("network unavailable")
+        """Needs a real key, since 2026-09-09, and that is the design not a gap.
+
+        This assertion used to hold with NO key, because `cmd_check` recited a
+        hand-written KEY_BLIND_ENDPOINTS constant. Phase D of the platform plan
+        deleted that constant and asks `GET /api/v1/me` instead, which is the
+        whole point: the list is now derived from the router that serves the
+        endpoints and cannot go stale. Deriving it costs a credential.
+
+        `run()` blanks ALASKA_DESK_API_KEY on purpose to isolate from .env.local,
+        so this test was structurally unable to pass after that change and failed
+        for a week's worth of runs that nobody made. Pass the key explicitly and
+        skip when the environment has none, rather than asserting a keyless
+        behaviour the client deliberately no longer has.
+        """
+        import os
+        key = os.environ.get("ALASKA_DESK_API_KEY", "")
+        if not key:
+            pytest.skip("needs ALASKA_DESK_API_KEY: the list is served, not recited")
+        r = run("check", env={"ALASKA_DESK_API_KEY": key})
+        if "reachability: unavailable" in r.stdout:
+            pytest.skip("platform predates GET /api/v1/me reachability")
         assert "Not reachable by ANY api key" in r.stdout
-        assert "clips (browse)" in r.stdout
+        # Derived from the router, so assert the PATH the server returns rather
+        # than the human label the deleted constant used to carry.
+        assert "/api/v1/clips" in r.stdout
 
     def test_they_are_not_probed_as_if_a_role_could_fix_them(self):
         probed = [label for label, *_ in ad.KEYED_PROBES]
@@ -611,6 +631,84 @@ class TestBrowseRouting:
     def test_sort_choices_are_enforced(self):
         r = run("browse", "--sort", "sideways")
         assert r.returncode != 0 and "sideways" in (r.stdout + r.stderr)
+
+
+
+class TestReachabilityRender:
+    """GET /me's reachability block, rendered.
+
+    These need no credential ON PURPOSE. The end-to-end test of this path skips
+    without a key, which means CI never runs it, which is how the first version
+    of this feature shipped with `read_only` unread and a 200-with-no-block
+    rendering as "auth method: ?"."""
+
+    FULL = {
+        "auth_method": "api_key", "read_only": False,
+        "communities": [{"slug": "alaska-news", "role": "admin"}],
+        "reachable_count": 196, "conditional_count": 15,
+        "reachable": ["/api/v1/articles"],
+        "unreachable": [
+            {"path": "/api/v1/clips", "reason": "session_auth_only",
+             "remedy": "No API key reaches this endpoint, whatever its role."},
+            {"path": "/api/v1/transcript/{sourceId}/speakers", "reason": "session_auth_only"},
+            {"path": "/api/v1/admin/thing", "reason": "requires_platform_admin"},
+            {"path": "/api/v1/articles/{id}/publish", "reason": "requires_role"},
+        ],
+    }
+
+    def _txt(self, reach):
+        return "\n".join(ad.render_reachability(reach))
+
+    def test_counts_and_auth_method(self):
+        out = self._txt(self.FULL)
+        assert "api_key" in out and "196" in out and "15" in out
+
+    def test_a_writable_key_is_told_it_could_be_read_only(self):
+        """SKILL.md tells the reader to tick Read-only when creating a key. The
+        server now reports whether they did, and saying nothing wastes the only
+        field that closes that loop."""
+        out = self._txt(self.FULL)
+        assert "NOT read-only" in out and "profile/settings" in out
+
+    def test_a_read_only_key_is_confirmed_and_warned_about_rag(self):
+        out = self._txt({**self.FULL, "read_only": True})
+        assert "READ-ONLY" in out
+        assert "POST" in out, "rag is a POST and a read-only key refuses it"
+        assert "NOT read-only" not in out
+
+    def test_each_reason_is_grouped_not_merged(self):
+        out = self._txt(self.FULL)
+        assert "Not reachable by ANY api key (2)" in out
+        assert "/api/v1/clips" in out
+        assert "editor/admin membership (1)" in out
+        assert "platform admin (1)" in out
+
+    def test_the_servers_remedy_is_shown_not_discarded(self):
+        assert "whatever its role" in self._txt(self.FULL)
+
+    def test_membership_role_is_surfaced(self):
+        assert "alaska-news" in self._txt(self.FULL) and "admin" in self._txt(self.FULL)
+
+    def test_an_unknown_reason_is_still_reported(self):
+        """A reason this client has never heard of must not vanish silently: the
+        whole point of asking the server is that it knows things we do not."""
+        out = self._txt({**self.FULL, "unreachable": [
+            {"path": "/api/v1/future", "reason": "some_new_gate"}]})
+        assert "some_new_gate" in out and "/api/v1/future" in out
+
+    def test_a_missing_block_reads_as_missing_not_as_unknown_values(self):
+        """A 200 with no reachability is an older platform build, not an empty
+        answer. Rendering it as 'auth method: ?' presents a missing FEATURE as a
+        missing VALUE, which sends the reader to look at their key."""
+        for empty in (None, {}, "not a dict"):
+            out = self._txt(empty)
+            assert "not reported by this platform build" in out
+            assert "auth method: ?" not in out
+
+    def test_rag_is_no_longer_probed(self):
+        """/me reports rag's reachability, and probing it meant an 84s synthesis
+        call on every `check`."""
+        assert not any(p == "/rag/query" for _, _, p, _, _ in ad.KEYED_PROBES)
 
 
 if __name__ == "__main__":

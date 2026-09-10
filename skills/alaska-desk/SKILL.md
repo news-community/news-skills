@@ -91,13 +91,21 @@ Access is tiered on the platform side, and your key may not reach everything.
 | `rag` | **role-gated** | an external consumer key saw 403 on 2026-07-23; slow (~1-2 min) where allowed |
 | `clip` | **id only** | resolves a known id to its public MP4 URL. You cannot BROWSE clips: see below |
 
-**Two endpoints are not role gates and no upgrade reaches them.** `GET /clips` (browse) and
-`GET /transcripts/search` authenticate by **cookie session only**: they read the browser's Supabase
-session rather than going through the API-key path, so they return 401 to *every* `cn_` key,
-including an admin's. Verified 2026-09-09 against an elevated newsroom key: both 401. This
-previously read as "needs an editor role", which sent people to ask for a role that could not have
-helped. Use `search --corpus transcripts` instead of `transcripts/search`, and get clip ids from
-`search` or an article.
+**Some endpoints are not role gates, and no upgrade reaches them.** A set of routes authenticate by
+**cookie session only**: they read the browser's Supabase session rather than the API-key path, so
+they refuse *every* `cn_` key, including an admin's. `GET /clips` (browse) and
+`GET /transcripts/search` are the two you are most likely to want; `GET /transcript/<id>/speakers`
+is a third, which is why you can read every word of a meeting and not learn who said it.
+
+**You no longer have to take that list from this file.** As of 2026-09-09 the platform answers it:
+`GET /api/v1/me` returns a `reachability` block derived from its own router, and `check` renders it.
+It separates `session_auth_only` (nothing to request) from `requires_role` (a membership you could
+be granted), and those endpoints now return **403** with `error: session_auth_only` and a remedy,
+rather than a bare 401 indistinguishable from a bad key. This client used to carry that list by
+hand; it does not any more, which is the point.
+
+Use `search --corpus transcripts` instead of `transcripts/search`, and get clip ids from `search` or
+an article.
 
 **A note on this table's provenance.** The per-mode rows marked 2026-07-23 came from a real external
 consumer key. The 2026-09-09 re-verification ran against an **elevated newsroom key**, which can
@@ -107,8 +115,9 @@ earlier version of this table asserted that a plain external key saw the `extern
 `social_post` corpora; the platform has gated both to editor/admin since 2026-06-09, so that line
 was describing either a privileged key or a bug, and it has been removed rather than restated.
 
-**Run `check` first.** It probes each surface and tells you what your key actually reaches, before
-you build a workflow on something it can't touch. It also names the endpoints no key reaches:
+**Run `check` first.** It asks the server what your key reaches, and probes a handful of endpoints
+directly on top of that. It reports whether your key is **read-only**, your role per community, the
+endpoints no key reaches and the ones a membership would unlock. It takes about five seconds:
 
 ```bash
 python3 scripts/alaska_desk.py check

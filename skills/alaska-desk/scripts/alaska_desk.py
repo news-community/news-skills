@@ -28,10 +28,12 @@ where to go next, so no external map is needed.
 
 Each user supplies their OWN `cn_` key (env `ALASKA_DESK_API_KEY`, or a `.env.local`
 next to this script). `digest` needs none; `search`/`angles`/`article`/`transcript`
-/`events`/`rag`/`communities` need a valid key. Browsing the clip library is NOT a
-role you can be granted: `GET /clips` authenticates by cookie session only and
-rejects every API key, admin included. `check` reports what YOUR key can reach,
-and names the endpoints no key reaches.
+/`events`/`rag`/`communities` need a valid key. `check` reports what YOUR key can
+reach by ASKING the server: `GET /api/v1/me` returns a `reachability` block
+derived from the platform's own router, so this client no longer carries a
+hand-written copy that could go stale. It separates `session_auth_only` (no key
+of any role reaches it, so there is nothing to request) from `requires_role` (a
+membership you could be granted), which is the distinction a bare 401 destroys.
 
 ## Discovery: the five Ws (angles mode)
 
@@ -70,7 +72,8 @@ LICENSE_NOTE = (
 UA = "alaska-desk/1.0"
 RELATED_MODES = ("digest · browse · search · angles · article · transcript · events · people · "
                  "person · topics · tags · rag · clip · communities · check")
-SEE_ALSO = "SKILL.md  ·  full API: alaskanews.com/docs/api"
+SEE_ALSO = ("SKILL.md  ·  full API: alaskanews.com/docs/api  ·  "
+            "machine spec: alaskanews.com/api/v1/openapi.json")
 
 
 # --- auth + HTTP + env plumbing (inlined; stdlib only, no dependencies) -------
@@ -1021,24 +1024,107 @@ def cmd_browse(args):
 # cookie session only (platform reads `supabase.auth.getUser()` rather than going
 # through runApiHandler), so they 401 for EVERY API key including an admin's.
 # Probing them taught the reader a role they could acquire, which was false.
+# These stay even though GET /me now reports reachability, because the two answer
+# different questions and have been observed to DISAGREE. /me is derived from the
+# router: it says what the code permits. A probe says what actually happened to
+# this key just now, against this deploy, including the RLS and validation layers
+# the router cannot see. Keeping a small empirical check is what would catch the
+# server's self-description going wrong, and on 2026-09-09 it was wrong: /me
+# listed `/api/v1/clips/{id}` as session_auth_only while its GET answers 404
+# unauthenticated, and listed three POST-only paths that have no GET at all.
+#
+# `rag` was REMOVED from this list on 2026-09-09. /me reports it, and probing it
+# meant a synthesis call measured at 84s on every `check`.
 KEYED_PROBES = [
     ("articles", "GET", "/articles", {"limit": 1, "community": "alaska-news"}, None),
     ("search", "GET", "/search", {"q": "alaska", "community": "alaska-news", "limit": 1}, None),
     ("transcripts", "GET", "/transcripts", {"limit": 1}, None),
     ("calendar (events)", "GET", "/calendar", {"community": "alaska-news", "limit": 1}, None),
     ("communities", "GET", "/communities", {"limit": 1}, None),
-    ("rag", "POST", "/rag/query", None, {"query": "test", "community": "alaska-news"}),
 ]
-# Endpoints an API key can never reach, whatever its role. Reported so `check`
-# answers the question "why can't I browse clips?" once, instead of leaving the
-# reader to seek a role upgrade that cannot help.
-KEY_BLIND_ENDPOINTS = [
-    ("clips (browse)", "cookie-session auth only; no API key reaches it"),
-    ("transcripts/search", "cookie-session auth only; use `search --corpus transcripts`"),
-]
+# KEY_BLIND_ENDPOINTS was deleted on 2026-09-09.
+#
+# It listed, by hand, the endpoints no API key reaches. It was correct when it
+# was written and nothing in either repo compared it to the platform's router,
+# so it would have kept answering confidently after the server changed. That is
+# the whole failure mode this client was compensating for.
+#
+# The platform now answers the question itself: GET /api/v1/me returns a
+# `reachability` block derived from its own route tree at build time and gated
+# by class 6 of its audit script, which fails if the generated list and the live
+# router disagree. It distinguishes `session_auth_only` (no key of any role
+# reaches it, so there is nothing to request) from `requires_role` (a membership
+# you could be granted), which is the distinction this list existed to preserve
+# and the one a bare 401 destroys.
+#
+# See platform docs/plans/2026-09-09-api-surface-agents-actually-consume.md.
 _STATUS = {401: "needs a key", 403: "forbidden (role/scope)", 429: "rate-limited",
            0: "unreachable", TIMED_OUT: "timed out (slow, not blocked)",
            NON_JSON: "non-JSON reply"}
+
+
+def render_reachability(reach):
+    """Render GET /me's `reachability` block as lines. Pure, so the render is
+    testable without a credential.
+
+    That matters more than it sounds. The only test covering this path needs a
+    real key and therefore skips in CI, which is how the previous version of this
+    code shipped a claim its own suite never executed."""
+    if not isinstance(reach, dict) or not reach:
+        # A 200 with no block is an older platform, not an empty answer. Printing
+        # "auth method: ?" would present a missing feature as a missing value.
+        return ["\n  reachability: not reported by this platform build "
+                "(GET /api/v1/me returned no `reachability`)"]
+    out = [f"\n  auth method: {reach.get('auth_method', '?')}"
+           f"   reachable: {reach.get('reachable_count', '?')}"
+           f"   role-gated: {reach.get('conditional_count', '?')}"]
+
+    # read_only is the field this skill cares about most: SKILL.md tells the
+    # reader to tick "Read-only" when creating a key, and until now nothing could
+    # tell them whether they actually did.
+    ro = reach.get("read_only")
+    if ro is True:
+        out.append("  key is READ-ONLY: the server rejects writes before a handler runs. "
+                   "Note /rag/query is an HTTP POST and is refused too.")
+    elif ro is False:
+        out.append("  key is NOT read-only: it can write. Nothing here writes, but a "
+                   "read-only key would make that a server guarantee instead of a promise. "
+                   "Create one at alaskanews.com/profile/settings (rag would then be refused).")
+
+    for c in reach.get("communities") or []:
+        if isinstance(c, dict):
+            out.append(f"  community {c.get('slug', '?')}: role {c.get('role', '?')}")
+
+    groups = {}
+    for e in reach.get("unreachable") or []:
+        if isinstance(e, dict):
+            groups.setdefault(e.get("reason", "unknown"), []).append(e)
+
+    blind = groups.get("session_auth_only") or []
+    if blind:
+        out.append(f"\n  Not reachable by ANY api key ({len(blind)}), "
+                   "and not a role you can be granted:")
+        for e in blind:
+            out.append(f"    {e.get('path', '?')}")
+        # The server ships a remedy per entry. Reciting it once per group keeps
+        # the list readable without discarding the actionable half.
+        remedy = next((e.get("remedy") for e in blind if e.get("remedy")), None)
+        if remedy:
+            out.append(f"    -> {remedy}")
+
+    for reason, label in (("requires_role", "Needs an editor/admin membership"),
+                          ("requires_platform_admin", "Needs platform admin")):
+        rows = groups.get(reason) or []
+        if rows:
+            out.append(f"\n  {label} ({len(rows)}), e.g.:")
+            for e in rows[:3]:
+                out.append(f"    {e.get('path', '?')}")
+
+    for reason, rows in groups.items():
+        if reason not in ("session_auth_only", "requires_role", "requires_platform_admin"):
+            out.append(f"\n  {reason} ({len(rows)}), e.g.: "
+                       + ", ".join(str(e.get('path', '?')) for e in rows[:3]))
+    return out
 
 
 def cmd_check(args):
@@ -1063,10 +1149,7 @@ def cmd_check(args):
         key_ok = key.startswith("cn_")
         for label, method, path, params, body in KEYED_PROBES:
             try:
-                # rag is the slow one; give it its real budget so a healthy key
-                # is not reported as unreachable by a probe that gave up early.
-                api_request(method, path, params=params, body=body,
-                            timeout=RAG_TIMEOUT if path == "/rag/query" else 30)
+                api_request(method, path, params=params, body=body, timeout=30)
                 status = "OK"
             except ApiError as e:
                 if e.code == 401:
@@ -1078,9 +1161,17 @@ def cmd_check(args):
                     status = _STATUS.get(e.code, f"HTTP {e.code}")
             print(f"  {label:26} {status}")
 
-    print("\n  Not reachable by ANY api key (not a role you can be granted):")
-    for label, why in KEY_BLIND_ENDPOINTS:
-        print(f"  {label:26} {why}")
+    # Ask the server rather than reciting a local copy. It cannot go stale: it is
+    # derived from the router that serves these endpoints.
+    if key:
+        try:
+            me = api_request("GET", "/me", timeout=30)
+        except ApiError as e:
+            print(f"\n  reachability: unavailable (HTTP {e.code}); "
+                  "platform may predate GET /api/v1/me reachability")
+        else:
+            for line in render_reachability((me or {}).get("reachability")):
+                print(line)
 
     _print_hateoas("check", args, None)
     print(f"\n---\n{LICENSE_NOTE}")
