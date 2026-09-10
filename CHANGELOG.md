@@ -93,5 +93,5 @@ checked.
 
 ## 1.0.0 - 2026-07-25
 
-- Initial extraction of the read-only API client from `studio` into its own repository, as the
+- Initial extraction of the read-only API client from an internal repository into this one, as the
   `alaska-desk` skill.
