@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Declared explicitly rather than inherited. The repo default is already `read`,
+# but once this is public a fork's pull request runs this workflow, and a default
+# that lives in a settings page can be changed without touching the file that
+# depends on it. Nothing here writes, so nothing here needs write.
+permissions:
+  contents: read
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
