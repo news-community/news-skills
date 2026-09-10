@@ -42,6 +42,26 @@ key instead and keep no `.env` nearby.
 client reads `<newsroom>/robots.txt` and, failing that, `<newsroom>/llms.txt`. That is one extra
 unauthenticated GET per run, to the same host you are already querying, carrying no key.
 
+## What the client does to protect the key
+
+**It refuses to follow a redirect to another origin.** `urllib` follows 3xx by default and rebuilds
+the request with the headers it was given, `Authorization` included, without caring that the target
+is a different host or that `https` has just become `http`. So anything able to answer for the
+configured newsroom, or to sit in front of it, could collect a reader's key with a single redirect.
+Reproduced on 2026-09-10 with two local servers: the second origin received the bearer token intact.
+The authenticated path now refuses instead, names both origins, and sends nothing. Same-origin
+redirects still work.
+
+It refuses rather than quietly stripping the header, because a newsroom API that redirects a JSON
+GET to another origin is not something to paper over, and the 401 that stripping would produce reads
+as a key problem, which is the wrong place to send the reader.
+
+**It will not read a permission out of a comment.** Usage terms are parsed only from an active
+`Content-Signal` line in `robots.txt`, or from a declaration-shaped list item in `llms.txt`, which is
+labelled as the softer source when used. A commented-out directive used to be read as a granted
+permission, and the dangerous direction is that one: reading `ai-train=no` as `yes` invites a reader
+to breach terms they were never given.
+
 ## Reporting a vulnerability
 
 **In this code:** use GitHub's private vulnerability reporting on this repository (the Security tab,

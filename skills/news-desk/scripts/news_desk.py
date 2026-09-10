@@ -143,11 +143,21 @@ _SIGNAL_RE = re.compile(r"([a-z][a-z-]*)\s*=\s*([a-z]+)")
 
 
 def content_signal(site_url, timeout=10):
-    """The newsroom's usage signals as an ordered `k=v, k=v` string, or None."""
+    """The newsroom's usage signals as `(signal, source)`, or `(None, None)`.
+
+    `robots.txt`'s `Content-Signal` is the canonical machine-readable location
+    and is authoritative here. `llms.txt` is a fallback and is PROSE, so what it
+    yields is labelled in the output rather than presented as equivalent.
+
+    Comments are stripped before anything is parsed. Without that, a newsroom
+    that had commented a directive OUT still had it read as active policy, which
+    on 2026-09-10 turned `# Content-Signal: ai-train=yes` into a printed
+    permission to train. The dangerous direction is the permissive one: reading
+    `no` as `yes` invites a reader to break terms they were never granted."""
     if site_url in _TERMS_CACHE:
         return _TERMS_CACHE[site_url]
-    found = None
-    for path, line_filter in (("/robots.txt", "content-signal:"), ("/llms.txt", None)):
+    found = (None, None)
+    for path, source in (("/robots.txt", "robots.txt"), ("/llms.txt", "llms.txt")):
         try:
             req = urllib.request.Request(site_url + path, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -155,41 +165,59 @@ def content_signal(site_url, timeout=10):
         except Exception:
             continue
         pairs = []
-        for line in text.splitlines():
-            low = line.lower()
-            if line_filter and line_filter not in low:
+        for raw in text.splitlines():
+            line = raw.split("#", 1)[0].strip()  # a commented directive is not policy
+            if not line:
                 continue
-            if not line_filter and "`" not in line:
-                continue  # llms.txt states its signals in backticks
-            for k, v in _SIGNAL_RE.findall(low.split(":", 1)[-1] if line_filter else low):
+            low = line.lower()
+            if source == "robots.txt":
+                if not low.startswith("content-signal:"):
+                    continue
+                scan = low.split(":", 1)[1]
+            else:
+                # Only a declaration-shaped list item, never free prose.
+                m = re.match(r"[-*]\s+`([a-z][a-z-]*=[a-z]+)`", low)
+                if not m:
+                    continue
+                scan = m.group(1)
+            for k, v in _SIGNAL_RE.findall(scan):
                 if k in ("ai-train", "search", "ai-input") and (k, v) not in pairs:
                     pairs.append((k, v))
         if pairs:
-            found = ", ".join(f"{k}={v}" for k, v in pairs)
+            found = (", ".join(f"{k}={v}" for k, v in pairs), source)
             break
     _TERMS_CACHE[site_url] = found
     return found
 
 
-def terms_note():
-    """The line printed under every rendered output."""
-    s = site()
+def terms_note(origin=None):
+    """The line printed under every rendered output.
+
+    Takes the origin the CONTENT came from, which is not always the configured
+    newsroom: `article <url>` fetches whatever URL it is handed. Printing the
+    configured newsroom's terms over another newsroom's story was the same
+    defect as hardcoding them, one level further in."""
+    s = (origin or site()).rstrip("/")
     host = urllib.parse.urlparse(s).netloc or s
-    signal = content_signal(s)
+    signal, source = content_signal(s)
     if not signal:
         return (f"Source: {host}. Its usage terms could NOT be read "
                 f"({host}/robots.txt and /llms.txt). Check them yourself before you "
                 "publish anything from this, and attribute with a backlink regardless.")
-    note = f"Source: {host}. Per its Content-Signal: {signal}."
+    via = "" if source == "robots.txt" else f" (read from {source}, which is prose; confirm it)"
+    note = f"Source: {host}. Per its Content-Signal: {signal}.{via}"
     if "ai-train=no" in signal:
         note += " Do not train on it."
     if "ai-input=yes" in signal:
         note += " Quote with attribution and a backlink."
     return note
+
+
 # Pseudo-statuses for failures that are not HTTP statuses. Negative so they can
 # never collide with a real code.
-NON_JSON = -1   # transport worked, payload was not JSON
-TIMED_OUT = -2  # API is up, it just did not answer in time
+NON_JSON = -1      # transport worked, payload was not JSON
+TIMED_OUT = -2     # API is up, it just did not answer in time
+CROSS_ORIGIN = -3  # a 3xx tried to take the credential to another origin
 # /rag/query synthesizes an answer over retrieved passages and is far slower than
 # every other mode: measured 84s on 2026-09-09, against the 60s default that used
 # to cut it off and report "unreachable".
@@ -215,11 +243,25 @@ def _load_env():
             if p in seen or not p.exists():
                 continue
             seen.add(p)
-            for line in p.read_text().splitlines():
+            # utf-8 explicitly: read_text() otherwise uses the platform's preferred
+            # encoding, which on Windows is a code page rather than utf-8, so a key
+            # file with any non-ascii byte in it decodes differently per machine.
+            for line in p.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                v = v.strip()
+                # Quoted values keep their content verbatim, including a #.
+                # Unquoted ones lose an inline comment, which otherwise ends up
+                # INSIDE the key: `KEY=cn_x  # mine` was parsed as the literal
+                # value "cn_x  # mine" and every request failed on a credential
+                # that looked right in the file.
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                    v = v[1:-1]
+                else:
+                    v = v.split(" #", 1)[0].split("\t#", 1)[0].strip()
+                os.environ.setdefault(k.strip(), v)
 
 
 def get_api_key():
@@ -232,6 +274,38 @@ def get_api_key():
         print(f"  # or: echo '{KEY_ENV}=cn_...' >> .env.local  (next to this script)", file=sys.stderr)
         sys.exit(2)
     return key
+
+
+def _origin(url):
+    u = urllib.parse.urlsplit(url)
+    return (u.scheme, u.hostname, u.port or (443 if u.scheme == "https" else 80))
+
+
+class _SameOriginOnly(urllib.request.HTTPRedirectHandler):
+    """Refuse to carry the API key across origins on a redirect.
+
+    urllib follows 3xx by default and rebuilds the request with the headers it
+    was given, `Authorization` included. It does not care that the new URL is a
+    different host, or that it is plain http when the first hop was https. So
+    anything able to answer for the configured newsroom, or to sit in front of
+    it, can collect a reader's key with one redirect. Reproduced 2026-09-10: a
+    302 to a second local origin received `Bearer cn_...` intact.
+
+    Refusing rather than quietly stripping the header, because a newsroom API
+    that redirects a JSON GET to another origin is not a thing this client
+    should paper over: the 401 that stripping would produce reads as a key
+    problem, which is exactly the wrong place to send the reader."""
+
+    def __init__(self, origin):
+        self.origin = origin
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if _origin(newurl) != self.origin:
+            raise ApiError(
+                CROSS_ORIGIN,
+                f"{req.full_url} redirected to a different origin ({newurl}); "
+                "refused rather than send your API key there")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def api_request(method, path, params=None, body=None, timeout=60):
@@ -249,8 +323,9 @@ def api_request(method, path, params=None, body=None, timeout=60):
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    opener = urllib.request.build_opener(_SameOriginOnly(_origin(url)))
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with opener.open(req, timeout=timeout) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
         raise ApiError(e.code, e.read().decode("utf-8", "replace"))
@@ -403,7 +478,7 @@ def _server_next_steps(resp) -> list:
     return out
 
 
-def _skill_next_steps(mode, args, has_key) -> list:
+def _skill_next_steps(mode, args, has_key, state=None) -> list:
     """State-driven next actions for THIS skill: (action, why). Priority order,
     capped at 5 by the caller. State shows up as `has_key` and per-mode context."""
     if mode == "digest":
@@ -422,9 +497,25 @@ def _skill_next_steps(mode, args, has_key) -> list:
         if not has_key:
             return [(f"set {KEY_ENV}, then re-run `check`",
                      "only `digest` works without a key; the rest report their reach once a key is set")]
-        return [('search "<topic>"', "your key reached the search surface; start there"),
-                ('angles "<topic>" --intent similar', "or work a story across the five Ws"),
-                ("digest", "or browse recent stories first to find a topic")]
+        # Read the probe results rather than assuming they passed. This block
+        # used to congratulate the reader on reaching search immediately after
+        # every request had been refused.
+        surfaces = (state or {}).get("surfaces", {})
+        reached = {k for k, v in surfaces.items() if v == "OK"}
+        rejected = [v for v in surfaces.values() if str(v).startswith("rejected")]
+        if rejected and not (reached - {"digest (public)"}):
+            return [("replace the key, then re-run `check`",
+                     "every keyed request was refused, so there is nothing to try until it works"),
+                    ("digest", "digest needs no key and still works")]
+        steps = []
+        if "search" in reached:
+            steps.append(('search "<topic>"', "your key reached search; start there"))
+            steps.append(('angles "<topic>" --intent similar', "or work a story across the five Ws"))
+        if "calendar (events)" in reached:
+            steps.append(("events --days 14", "your key reached the calendar; see what is coming up"))
+        if not steps:
+            steps.append(("digest", "the keyed surfaces did not answer; digest needs no key"))
+        return steps[:5]
     if mode == "search":
         return [
             ("article <id from a result above>", "open a match's full body to quote (hold What: this is your story)"),
@@ -500,7 +591,7 @@ def _skill_next_steps(mode, args, has_key) -> list:
     return []
 
 
-def _print_hateoas(mode, args, resp=None):
+def _print_hateoas(mode, args, resp=None, state=None):
     """The CLI HATEOAS footer: surface the server's next_steps, then this skill's,
     then related modes + see-also. Never called in --json mode (machine consumers
     read next_steps from the payload)."""
@@ -510,7 +601,7 @@ def _print_hateoas(mode, args, resp=None):
         print("\nThe API points onward to:")
         for s in server[:5]:
             print(f"  {s}")
-    steps = _skill_next_steps(mode, args, has_key)
+    steps = _skill_next_steps(mode, args, has_key, state)
     if steps:
         print("\nNext steps:")
         for action, why in steps[:5]:
@@ -571,6 +662,13 @@ def _guided(fn):
                 "  answer over retrieved passages and routinely takes over a minute.\n"
                 "  Recovery: narrow the query, or re-run: nothing was written, so a retry is safe."
             )
+        if e.code == CROSS_ORIGIN:
+            sys.exit(
+                f"Refused a cross-origin redirect ({e.body}).\n"
+                "  Why: your API key would have been sent to a host that is not the newsroom\n"
+                "  you configured. Nothing was sent.\n"
+                "  Recovery: check NEWS_SITE and PLATFORM_API_BASE for a value you did not set."
+            )
         if e.code == NON_JSON:
             sys.exit(
                 f"Unexpected non-JSON response ({e.body}).\n"
@@ -612,15 +710,24 @@ def cmd_article(args):
     """Full article. A URL or slug uses the public markdown surface (no key); a
     bare id uses GET /articles/<id> (keyed, richer: sources, persons)."""
     ref = args.ref
-    looks_like_path = ref.startswith("http") or "/" in ref
-    if looks_like_path:
-        url = ref if ref.startswith("http") else f"{site()}/c/{args.community}/{ref}"
+    # A UUID is an id and takes the keyed endpoint. EVERYTHING else is a slug or a
+    # URL and takes the public markdown surface. The old test was `"/" in ref`,
+    # which sent a bare slug down the keyed branch and demanded a key for
+    # something this client documents as public.
+    is_id = bool(re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                              r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", ref))
+    if not is_id:
+        url = ref if ref.startswith("http") else f"{site()}/c/{args.community}/{ref.lstrip('/')}"
+        # The terms belong to wherever the CONTENT came from, which for an explicit
+        # URL need not be the configured newsroom.
+        parts = urllib.parse.urlsplit(url)
+        origin = f"{parts.scheme}://{parts.netloc}"
         if args.json:
             print(json.dumps({"markdown": fetch_markdown(url)}, ensure_ascii=False))
             return
         print(fetch_markdown(url).rstrip())
         _print_hateoas("article", args, None)
-        print(f"\n---\n{terms_note()}")
+        print(f"\n---\n{terms_note(origin)}")
     else:
         resp = _guided(lambda: api_request("GET", f"/articles/{ref}"))
 
@@ -771,15 +878,42 @@ def cmd_events(args):
     client-side on title and location. To search events by relevance across all
     time (including past ones), use `search <q> --corpus events`."""
     now = _dt.datetime.now(_dt.timezone.utc)
-    params = {
+    base = {
         "community": args.community,
         "start": now.isoformat(),
         "end": (now + _dt.timedelta(days=args.days)).isoformat(),
-        "limit": min(200, max(args.limit, 50) if args.query else args.limit),
     }
     if args.type:
-        params["types"] = args.type
-    resp = _guided(lambda: api_request("GET", "/calendar", params))
+        base["types"] = args.type
+
+    if not args.query:
+        resp = _guided(lambda: api_request("GET", "/calendar", dict(base, limit=args.limit)))
+        truncated = False
+    else:
+        # /calendar has no full-text parameter, so a query filters client-side. It
+        # used to filter ONE page of 50 and report "nothing in the window" when the
+        # match sat at position 55, which on a tool people use to find hearings and
+        # comment deadlines is the worst possible way to be wrong: it does not look
+        # like a limitation, it looks like an answer. Page the whole window instead,
+        # and say so when the cap stops us rather than implying completeness.
+        events, offset, truncated = [], 0, False
+        while True:
+            page = _guided(lambda: api_request(
+                "GET", "/calendar", dict(base, limit=EVENTS_PAGE, offset=offset)))
+            rows = ((page.get("data") or {}).get("events")) if isinstance(page, dict) else None
+            if not isinstance(rows, list):
+                resp = page
+                break
+            events.extend(rows)
+            offset += len(rows)
+            if len(rows) < EVENTS_PAGE:
+                break
+            if offset >= EVENTS_SCAN_CAP:
+                truncated = True
+                break
+        else:
+            pass
+        resp = {"data": {"events": events}} if isinstance(rows, list) else resp
 
     def render(r):
         events = ((r.get("data") or {}).get("events")) if isinstance(r, dict) else None
@@ -793,8 +927,12 @@ def cmd_events(args):
         if args.query:
             head += f", matching {args.query!r}"
         out = [head]
+        if truncated:
+            out.append(f"(scanned the first {EVENTS_SCAN_CAP} events in the window and stopped; "
+                       "there may be later matches. Narrow with --type or --days.)")
         if not events:
-            out.append(f"(nothing in the window{' matching that' if args.query else ''}. "
+            out.append(f"(nothing in the window{' matching that' if args.query else ''}"
+                       f"{', in the part scanned' if truncated else ''}. "
                        f"Widen with --days, or use `search` to reach past events.)")
         for e in events[: args.limit]:
             when = (e.get("event_date") or "")[:16].replace("T", " ")
@@ -1086,6 +1224,10 @@ def cmd_tags(args):
 
 
 # Sort modes the article list accepts. Verified against the live API 2026-09-09.
+# Paging for the client-side event filter. 200 is the API's own max page size.
+EVENTS_PAGE = 200
+EVENTS_SCAN_CAP = 1000
+
 SORTS = ("hot", "new", "timeline", "top", "popular", "alphabetical")
 TIME_WINDOWS = ("today", "week", "month", "all")
 
@@ -1237,52 +1379,87 @@ def render_reachability(reach):
 
 def cmd_check(args):
     """Report what THIS key can actually reach, so a user learns their access
-    before building on it. Mirrors the auth spike, and stays quiet when no key is
-    set rather than erroring once per endpoint."""
+    before building on it.
+
+    Three things this used to get wrong, all of them the instrument answering a
+    question next to the one asked:
+      - `--json` printed prose, so the one mode a script would parse was the one
+        mode that could not be parsed.
+      - A key rejected by EVERY endpoint was labelled "no access (role)" on each
+        of them, sending the reader after a role upgrade when the key was simply
+        bad. A role gate is something some endpoints apply; a rejection
+        everywhere is a credential.
+      - The footer said "your key reached the search surface; start there" after
+        every single request had failed."""
     _load_env()
     host = urllib.parse.urlparse(site()).netloc or site()
-    print(f"reachability: {host}, community {args.community}\n")
+    key = read_key()
+    result = {"newsroom": host, "community": args.community, "surfaces": {},
+              "key": {"present": bool(key), "format_ok": key.startswith("cn_") if key else None},
+              "reachability": None, "notes": []}
 
     try:
         fetch_markdown(site() + "/", timeout=15)
-        print(f"  {'digest (public)':26} OK")
+        result["surfaces"]["digest (public)"] = "OK"
     except ApiError as e:
-        print(f"  {'digest (public)':26} {_STATUS.get(e.code, f'HTTP {e.code}')}")
+        result["surfaces"]["digest (public)"] = _STATUS.get(e.code, f"HTTP {e.code}")
 
-    key = read_key()
-    if not key:
-        print(f"  {'(keyed modes)':26} no key set")
-    else:
-        if not key.startswith("cn_"):
-            print(f"  {'(key format)':26} WRONG: starts {key[:4]!r}, alaskanews keys start 'cn_'")
-        key_ok = key.startswith("cn_")
+    codes = []
+    if key:
         for label, method, path, params, body in keyed_probes(args.community):
             try:
                 api_request(method, path, params=params, body=body, timeout=30)
-                status = "OK"
+                result["surfaces"][label] = "OK"
+                codes.append(200)
             except ApiError as e:
-                if e.code == 401:
-                    # A valid cn_ key that 401s on ONE endpoint while others pass is
-                    # a role gate, not a bad key. Only call it a bad key if the
-                    # prefix is wrong.
-                    status = "no access (role)" if key_ok else "rejected (bad key)"
-                else:
-                    status = _STATUS.get(e.code, f"HTTP {e.code}")
-            print(f"  {label:26} {status}")
+                codes.append(e.code)
+                result["surfaces"][label] = _STATUS.get(e.code, f"HTTP {e.code}") if e.code != 401 else "401"
 
-    # Ask the server rather than reciting a local copy. It cannot go stale: it is
-    # derived from the router that serves these endpoints.
-    if key:
+        # Now interpret, with every probe in hand rather than one at a time.
+        all_401 = bool(codes) and all(c == 401 for c in codes)
+        for label, status in list(result["surfaces"].items()):
+            if status != "401":
+                continue
+            if not result["key"]["format_ok"]:
+                result["surfaces"][label] = "rejected (bad key format)"
+            elif all_401:
+                result["surfaces"][label] = "rejected (key not accepted)"
+            else:
+                result["surfaces"][label] = "no access (role)"
+        if all_401:
+            result["notes"].append(
+                "Every keyed request was rejected. That is the key itself, not a role: a role "
+                "gate stops some endpoints, never all of them. Check it is current and not revoked.")
+        if key and not result["key"]["format_ok"]:
+            result["notes"].append(
+                f"Key starts {key[:4]!r}; keys for this API start 'cn_'.")
+
         try:
             me = api_request("GET", "/me", timeout=30)
         except ApiError as e:
-            print(f"\n  reachability: unavailable (HTTP {e.code}); "
-                  "platform may predate GET /api/v1/me reachability")
+            result["notes"].append(
+                f"Reachability unavailable (HTTP {e.code})."
+                + (" Expected, given the key was rejected everywhere." if all_401
+                   else " This platform may predate GET /api/v1/me reachability."))
         else:
-            for line in render_reachability((me or {}).get("reachability")):
-                print(line)
+            result["reachability"] = (me or {}).get("reachability")
 
-    _print_hateoas("check", args, None)
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
+    print(f"reachability: {host}, community {args.community}\n")
+    for label, status in result["surfaces"].items():
+        print(f"  {label:26} {status}")
+    if not key:
+        print(f"  {'(keyed modes)':26} no key set")
+    for note in result["notes"]:
+        print(f"\n  {note}")
+    if result["reachability"] is not None:
+        for line in render_reachability(result["reachability"]):
+            print(line)
+
+    _print_hateoas("check", args, None, state=result)
     print(f"\n---\n{terms_note()}")
 
 

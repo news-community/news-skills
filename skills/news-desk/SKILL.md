@@ -17,7 +17,7 @@ compatibility: >-
   mode except digest, that newsroom's own cn_ API key in NEWS_DESK_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   author: Communities News LLC
   homepage: https://github.com/news-community/news-skills
   repository: news-community/news-skills

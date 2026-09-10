@@ -47,7 +47,7 @@ class TestLicenseDiscipline:
         which is the one staleness bug in this client with an ethical edge."""
         monkeypatch.setattr(ad, "_TERMS_CACHE", {})
         monkeypatch.setattr(ad, "content_signal",
-                            lambda s, timeout=10: "ai-train=no, search=yes, ai-input=yes")
+                            lambda s, timeout=10: ("ai-train=no, search=yes, ai-input=yes", "robots.txt"))
         note = ad.terms_note()
         for term in ("ai-train=no", "attribution", "backlink"):
             assert term in note
@@ -105,8 +105,10 @@ class TestGracefulAuth:
         r = run("check", env={"ALASKA_DESK_API_KEY": "msk_deadbeef"})
         if "unreachable" in (r.stdout + r.stderr):
             pytest.skip("network unavailable")
-        assert "WRONG" in r.stdout and "cn_" in r.stdout
+        assert "cn_" in r.stdout, "the expected prefix must be named"
+        assert "msk_" in r.stdout, "the prefix they actually supplied must be named"
         assert "rejected" in r.stdout  # not "needs a key"
+        assert "no access (role)" not in r.stdout, "a bad key is not a role problem"
 
     def test_keyed_mode_with_wrong_prefix_gives_wrong_type_recovery(self):
         r = run("search", "test", env={"ALASKA_DESK_API_KEY": "msk_deadbeef"})
@@ -274,7 +276,16 @@ class TestJsonIsMachineClean:
         assert "Next steps:" not in out
         assert "ai-train=no" not in out
 
-    def test_emit_markdown_carries_footer_and_license(self, capsys):
+    def test_emit_markdown_carries_footer_and_license(self, capsys, monkeypatch):
+        """Terms are fetched now, so this must mock the fetch.
+
+        It did not, and asserted on a live newsroom's actual stance. The suite is
+        advertised as offline in three places; with networking disabled this was
+        the one test that failed, which makes the claim false and, worse, makes a
+        network outage look like a code defect."""
+        monkeypatch.setattr(ad, "_TERMS_CACHE", {})
+        monkeypatch.setattr(ad, "content_signal",
+                            lambda s, timeout=10: ("ai-train=no, ai-input=yes", "robots.txt"))
         ad._emit({"data": {}}, _Args(json=False), mode="search")
         out = capsys.readouterr().out
         assert "Next steps:" in out and "ai-train=no" in out
@@ -299,7 +310,8 @@ class TestNonJsonResponses:
             def read(self, *a): return b"\x00\x80\xff not json"
             def __enter__(self): return self
             def __exit__(self, *a): return False
-        monkeypatch.setattr(ad.urllib.request, "urlopen", lambda *a, **k: _Resp())
+        monkeypatch.setattr(ad.urllib.request, "build_opener",
+                            lambda *a, **k: type("O", (), {"open": staticmethod(lambda *a, **k: _Resp())})())
         monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_" + "0" * 40)
         with pytest.raises(ad.ApiError) as ei:
             ad.api_request("GET", "/clips/x/stream")
@@ -310,7 +322,8 @@ class TestNonJsonResponses:
         client said 'unreachable', sending the reader to debug their network."""
         def _boom(*a, **k):
             raise ad.urllib.error.URLError(TimeoutError("timed out"))
-        monkeypatch.setattr(ad.urllib.request, "urlopen", _boom)
+        monkeypatch.setattr(ad.urllib.request, "build_opener",
+                            lambda *a, **k: type("O", (), {"open": staticmethod(_boom)})())
         monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_" + "0" * 40)
         with pytest.raises(ad.ApiError) as ei:
             ad.api_request("POST", "/rag/query")
@@ -331,7 +344,8 @@ class TestEventsAreActuallyUpcoming:
         import inspect, re
         src = inspect.getsource(ad.cmd_events)
         calls = re.findall(r'api_request\(\s*"([A-Z]+)"\s*,\s*"([^"]+)"', src)
-        assert calls == [("GET", "/calendar")], f"events must use /calendar, got {calls}"
+        assert calls, "events makes no request at all"
+        assert set(calls) == {("GET", "/calendar")}, f"events must only GET /calendar, got {calls}"
 
     def test_events_window_starts_now_and_runs_forward(self, monkeypatch):
         seen = {}
@@ -804,12 +818,14 @@ class TestTermsAreReadNotAsserted:
 
     def test_robots_content_signal_is_preferred(self, monkeypatch):
         self._serve(monkeypatch, {"/robots.txt": self.ROBOTS, "/llms.txt": self.LLMS})
-        assert ad.content_signal("https://x.test") == "ai-train=no, search=yes, ai-input=yes"
+        assert ad.content_signal("https://x.test") == (
+            "ai-train=no, search=yes, ai-input=yes", "robots.txt")
 
     def test_llms_txt_is_the_fallback(self, monkeypatch):
         self._serve(monkeypatch, {"/llms.txt": self.LLMS})
-        got = ad.content_signal("https://x.test")
+        got, source = ad.content_signal("https://x.test")
         assert "ai-train=yes" in got and "ai-input=no" in got
+        assert source == "llms.txt", "the softer source must be labelled as such"
 
     def test_a_different_newsroom_gets_ITS_terms_not_alaskas(self, monkeypatch):
         """The whole point. A newsroom that permits training and forbids quoting
@@ -1022,6 +1038,235 @@ class TestSkillMdMatchesTheCode:
             "SKILL.md must state the read-only direction somewhere"
         assert "never submits" in text or "only consumes" in text.lower(), \
             "SKILL.md must say plainly that it does not write back"
+
+
+
+# --------------------------------------------------------------------------
+# Findings from two external reviews, 2026-09-10. Every one was reproduced
+# before it was fixed, and each has a guard here.
+# --------------------------------------------------------------------------
+
+class TestCredentialNeverCrossesOrigin:
+    """The high-severity one.
+
+    urllib follows 3xx and rebuilds the request with the headers it was given,
+    `Authorization` included, without caring that the target is a different host
+    or that https just became http. Reproduced with two local servers: the second
+    origin received `Bearer cn_...` intact."""
+
+    def _redirect_to(self, monkeypatch, location):
+        def _open(req, timeout=None):
+            raise ad.urllib.error.HTTPError(req.full_url, 302, "Found",
+                                            {"Location": location}, None)
+        real = ad.urllib.request.build_opener
+        def _builder(*handlers):
+            opener = real(*handlers)
+            for h in handlers:
+                if isinstance(h, ad._SameOriginOnly):
+                    def open_(req, timeout=None, _h=h):
+                        try:
+                            return _open(req, timeout)
+                        except ad.urllib.error.HTTPError as e:
+                            return _h.redirect_request(req, None, 302, "Found",
+                                                       e.headers, location)
+                    opener.open = open_
+            return opener
+        monkeypatch.setattr(ad.urllib.request, "build_opener", _builder)
+        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_" + "0" * 40)
+        monkeypatch.setenv("PLATFORM_API_BASE", "https://newsroom.test/api/v1")
+
+    def test_a_cross_origin_redirect_is_refused(self, monkeypatch):
+        self._redirect_to(monkeypatch, "https://attacker.test/collect")
+        with pytest.raises(ad.ApiError) as ei:
+            ad.api_request("GET", "/articles")
+        assert ei.value.code == ad.CROSS_ORIGIN
+        assert "attacker.test" in str(ei.value)
+
+    def test_an_https_to_http_downgrade_is_refused(self, monkeypatch):
+        """Same host, plain http. A downgrade puts the key on the wire."""
+        self._redirect_to(monkeypatch, "http://newsroom.test/api/v1/articles")
+        with pytest.raises(ad.ApiError) as ei:
+            ad.api_request("GET", "/articles")
+        assert ei.value.code == ad.CROSS_ORIGIN
+
+    def test_a_same_origin_redirect_is_still_followed(self, monkeypatch):
+        """The guard must not break ordinary redirects within the newsroom."""
+        h = ad._SameOriginOnly(ad._origin("https://newsroom.test/api/v1/articles"))
+        req = ad.urllib.request.Request("https://newsroom.test/api/v1/articles")
+        out = h.redirect_request(req, None, 302, "Found", {},
+                                 "https://newsroom.test/api/v1/articles/2")
+        assert out is not None
+
+    def test_the_guard_is_installed_on_the_authenticated_path(self):
+        import inspect
+        assert "_SameOriginOnly" in inspect.getsource(ad.api_request)
+
+
+class TestTermsCannotBeMisread:
+    """The terms line is printed under someone else's reporting. Reading it
+    wrongly in the PERMISSIVE direction invites a reader to break terms they
+    were never granted, so these guard that direction specifically."""
+
+    def _serve(self, monkeypatch, bodies):
+        class R:
+            def __init__(s, t): s.t = t
+            def read(s, *a): return s.t.encode()
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+        def _open(req, timeout=None):
+            for path, text in bodies.items():
+                if req.full_url.endswith(path): return R(text)
+            raise ad.urllib.error.URLError("not found")
+        monkeypatch.setattr(ad, "_TERMS_CACHE", {})
+        monkeypatch.setattr(ad.urllib.request, "urlopen", _open)
+
+    def test_a_commented_out_directive_is_not_policy(self, monkeypatch):
+        """`# Content-Signal: ai-train=yes` was read as a granted permission."""
+        self._serve(monkeypatch, {"/robots.txt":
+                                  "User-agent: *\n# Content-Signal: ai-train=yes\nAllow: /\n"})
+        assert ad.content_signal("https://x.test") == (None, None)
+
+    def test_an_inline_comment_is_trimmed_not_parsed(self, monkeypatch):
+        self._serve(monkeypatch, {"/robots.txt":
+                                  "Content-Signal: ai-train=no  # ai-input=yes is NOT granted\n"})
+        signal, _ = ad.content_signal("https://x.test")
+        assert signal == "ai-train=no"
+
+    def test_prose_mentioning_a_directive_is_not_policy(self, monkeypatch):
+        self._serve(monkeypatch, {"/llms.txt":
+                                  "We forbid this:\n\nSome prose about `ai-train=yes` as an example.\n"})
+        assert ad.content_signal("https://y.test") == (None, None)
+
+    def test_a_real_llms_declaration_is_accepted_and_labelled(self, monkeypatch):
+        self._serve(monkeypatch, {"/llms.txt": "- `ai-train=no` do not train\n"})
+        signal, source = ad.content_signal("https://z.test")
+        assert signal == "ai-train=no" and source == "llms.txt"
+        monkeypatch.setenv("NEWS_SITE", "https://z.test")
+        assert "prose; confirm it" in ad.terms_note()
+
+    def test_terms_follow_the_origin_the_content_came_from(self, monkeypatch):
+        """`article <url>` fetches whatever URL it is handed. Printing the
+        CONFIGURED newsroom's terms over another newsroom's story is the same
+        defect as hardcoding them, one level further in."""
+        self._serve(monkeypatch, {"/robots.txt": "Content-Signal: ai-train=no, ai-input=yes\n"})
+        monkeypatch.setenv("NEWS_SITE", "https://mine.test")
+        note = ad.terms_note("https://someone-else.test")
+        assert "someone-else.test" in note and "mine.test" not in note
+
+
+class TestArticleRefRouting:
+    def test_a_bare_slug_uses_the_public_surface(self, monkeypatch):
+        """Documented as public, but the old test was `"/" in ref`, so a bare
+        slug fell through to the keyed endpoint and demanded a key."""
+        seen = {}
+        monkeypatch.setattr(ad, "fetch_markdown", lambda u, **k: seen.setdefault("url", u) or "# ok")
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "terms")
+        monkeypatch.setattr(ad, "api_request", lambda *a, **k: pytest.fail("slug must not be keyed"))
+        ad.cmd_article(_Args(ref="some-article-slug"))
+        assert seen["url"].endswith("/c/alaska-news/some-article-slug")
+
+    def test_a_uuid_uses_the_keyed_endpoint(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(ad, "api_request",
+                            lambda m, p, **k: seen.setdefault("path", p) or {"data": {"title": "x"}})
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "terms")
+        ad.cmd_article(_Args(ref="e8b2c1dd-849b-467d-adcd-827178bedb07"))
+        assert seen["path"] == "/articles/e8b2c1dd-849b-467d-adcd-827178bedb07"
+
+
+class TestEventsDoesNotInventAbsence:
+    def test_a_match_past_the_first_page_is_found(self, monkeypatch):
+        """Filtering one page of 50 and reporting 'nothing in the window' is the
+        worst way for a hearings tool to be wrong: it does not look like a
+        limitation, it looks like an answer."""
+        rows = [{"event_title": f"Meeting {i}", "event_date": "2026-09-20T00:00:00Z"}
+                for i in range(260)]
+        rows[255] = {"event_title": "Zoning board public hearing",
+                     "event_date": "2026-09-25T00:00:00Z"}
+        monkeypatch.setattr(ad, "api_request", lambda m, p, params=None, **k: {
+            "data": {"events": rows[params.get("offset", 0):
+                                   params.get("offset", 0) + params.get("limit", 10)]}})
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "terms")
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ad.cmd_events(_Args(query="zoning", limit=5, days=30))
+        out = buf.getvalue()
+        assert "Zoning board public hearing" in out
+        assert "nothing in the window" not in out
+
+    def test_hitting_the_scan_cap_is_admitted(self, monkeypatch):
+        rows = [{"event_title": f"Meeting {i}", "event_date": "2026-09-20T00:00:00Z"}
+                for i in range(ad.EVENTS_SCAN_CAP + ad.EVENTS_PAGE)]
+        monkeypatch.setattr(ad, "api_request", lambda m, p, params=None, **k: {
+            "data": {"events": rows[params.get("offset", 0):
+                                    params.get("offset", 0) + params.get("limit", 10)]}})
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "terms")
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            ad.cmd_events(_Args(query="nothing-matches-this", limit=5, days=30))
+        assert "stopped" in buf.getvalue(), "a truncated scan must not imply completeness"
+
+
+class TestCheckReportsWhatHappened:
+    def test_json_mode_emits_json(self):
+        r = run("check", "--json")
+        payload = __import__("json").loads(r.stdout)
+        assert set(payload) >= {"newsroom", "surfaces", "key", "notes"}
+
+    def test_a_key_rejected_everywhere_is_a_key_problem_not_a_role_one(self):
+        r = run("check", env={"NEWS_DESK_API_KEY": "cn_" + "0" * 40})
+        if "unreachable" in r.stdout:
+            pytest.skip("network unavailable")
+        assert "no access (role)" not in r.stdout
+        assert "rejected" in r.stdout
+        assert "role gate stops some endpoints, never all" in r.stdout
+
+    def test_the_footer_does_not_claim_a_surface_it_never_reached(self):
+        steps = ad._skill_next_steps("check", _Args(), has_key=True, state={
+            "surfaces": {"digest (public)": "OK", "search": "rejected (key not accepted)"}})
+        blob = " ".join(a + " " + w for a, w in steps)
+        assert "reached search" not in blob
+        assert "replace the key" in blob
+
+    def test_the_footer_offers_what_did_answer(self):
+        steps = ad._skill_next_steps("check", _Args(), has_key=True, state={
+            "surfaces": {"search": "OK", "calendar (events)": "OK"}})
+        blob = " ".join(a for a, _ in steps)
+        assert "search" in blob and "events" in blob
+
+
+class TestEnvParsing:
+    def _write(self, tmp_path, text):
+        (tmp_path / ".env.local").write_text(text, encoding="utf-8")
+        return tmp_path
+
+    def test_an_inline_comment_does_not_become_part_of_the_key(self, tmp_path, monkeypatch):
+        """`KEY=cn_x  # mine` parsed as the literal value "cn_x  # mine", so every
+        request failed on a credential that looked correct in the file."""
+        monkeypatch.chdir(self._write(tmp_path, "PROBE_A=cn_plain  # my key\n"))
+        monkeypatch.delenv("PROBE_A", raising=False)
+        ad._load_env()
+        assert __import__("os").environ["PROBE_A"] == "cn_plain"
+
+    def test_a_quoted_value_keeps_its_hash(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(self._write(tmp_path, 'PROBE_B="cn_a # b"\n'))
+        monkeypatch.delenv("PROBE_B", raising=False)
+        ad._load_env()
+        assert __import__("os").environ["PROBE_B"] == "cn_a # b"
+
+    def test_a_hash_with_no_space_is_part_of_the_value(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(self._write(tmp_path, "PROBE_C=cn_a#b\n"))
+        monkeypatch.delenv("PROBE_C", raising=False)
+        ad._load_env()
+        assert __import__("os").environ["PROBE_C"] == "cn_a#b"
+
+    def test_env_files_are_read_as_utf8_regardless_of_platform(self):
+        """read_text() defaults to the platform's preferred encoding, which on
+        Windows is a code page, so the same file decoded differently per machine."""
+        import inspect
+        assert 'encoding="utf-8"' in inspect.getsource(ad._load_env)
 
 
 if __name__ == "__main__":

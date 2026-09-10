@@ -6,6 +6,41 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.2.0 - 2026-09-10
+
+Findings from two external code reviews. Every one was reproduced before it was fixed.
+
+### Security
+
+- **The API key no longer follows redirects to another origin.** `urllib` rebuilds a redirected
+  request with the headers it was given, `Authorization` included, regardless of host or scheme.
+  Reproduced with two local servers: the second origin received the bearer token intact. The
+  authenticated path refuses now, names both origins, and sends nothing.
+
+### Fixed
+
+- A **commented-out** `Content-Signal` directive was read as granted permission, so
+  `# Content-Signal: ai-train=yes` printed as a licence to train. Comments are stripped before
+  parsing, and `llms.txt` now yields policy only from declaration-shaped list items, labelled as the
+  softer source.
+- `article <url>` printed the **configured** newsroom's terms over content fetched from a different
+  one. Terms follow the origin the content actually came from.
+- A **bare slug** took the keyed endpoint and demanded a key, though it is documented as public. A
+  UUID now distinguishes an id from a slug.
+- `events "<query>"` filtered one page and reported "nothing in the window" when the match sat
+  further down. For a tool people use to find hearings and comment deadlines, that does not look
+  like a limitation, it looks like an answer. It pages the window now, and says so when a scan cap
+  stops it.
+- `check --json` printed prose, so the one mode a script would parse was the one that could not be.
+- A key rejected by **every** endpoint was labelled "no access (role)" on each, sending readers after
+  a role upgrade when the credential was simply bad.
+- The `check` footer said "your key reached the search surface" after every request had failed.
+- An inline comment in `.env` became part of the value, so `KEY=cn_x  # mine` failed on a credential
+  that looked correct in the file. `.env` files are also read as utf-8 explicitly rather than in the
+  platform's preferred encoding.
+- One test needed the network, so the suite advertised as offline in three places failed with
+  networking disabled. It is now 0 failures offline.
+
 ## 1.1.0 - 2026-09-10
 
 The release that stopped this being an Alaska-only tool, and stopped it asserting things it had not
