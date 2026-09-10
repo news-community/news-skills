@@ -9,6 +9,7 @@ fail with guidance rather than a traceback.
 
     python3 -m pytest test_news_desk.py -q
 """
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -839,6 +840,158 @@ class TestTermsAreReadNotAsserted:
                             lambda r, timeout=None: (calls.append(1), real(r, timeout))[1])
         ad.content_signal("https://x.test"); ad.content_signal("https://x.test")
         assert len(calls) == 1, "every rendered mode prints this; refetching per mode is waste"
+
+
+
+# --------------------------------------------------------------------------
+# The SKILL.md document itself.
+#
+# Everything above this line tests the Python client. Nothing tested the file
+# that IS the skill, which is what an agent actually loads, and which had
+# already drifted: `check` was a registered mode absent from the Modes block.
+#
+# Constraints below come from the Agent Skills specification at
+# https://agentskills.io/specification, not from taste.
+# --------------------------------------------------------------------------
+
+SKILL_MD = Path(__file__).resolve().parent.parent / "SKILL.md"
+
+
+def _frontmatter():
+    """Parse SKILL.md's YAML frontmatter without a YAML dependency.
+
+    The client is stdlib-only and its tests should not be the thing that drags
+    PyYAML in. This handles exactly the three shapes the file uses: `key: value`,
+    `key: >-` with an indented folded block, and `key:` with an indented map."""
+    text = SKILL_MD.read_text()
+    assert text.startswith("---\n"), "SKILL.md must open with YAML frontmatter"
+    body = text.split("---\n", 2)[1]
+    out, key, folded, mapping = {}, None, [], None
+    for raw in body.splitlines():
+        if not raw.strip():
+            continue
+        indented = raw.startswith("  ")
+        if indented and key and folded is not None:
+            folded.append(raw.strip())
+            continue
+        if indented and mapping is not None:
+            k, _, v = raw.strip().partition(":")
+            mapping[k.strip()] = v.strip().strip('"').strip("'")
+            continue
+        if key and folded:
+            out[key] = " ".join(folded)
+        key, folded, mapping = None, None, None
+        k, _, v = raw.partition(":")
+        k, v = k.strip(), v.strip()
+        if v in (">-", "|", ">"):
+            key, folded = k, []
+        elif v == "":
+            mapping = out.setdefault(k, {})
+        else:
+            out[k] = v.strip('"').strip("'")
+    if key and folded:
+        out[key] = " ".join(folded)
+    return out
+
+
+class TestSkillMdMeetsTheSpec:
+    """https://agentskills.io/specification, the standard this repo declares."""
+
+    def test_required_fields_are_present(self):
+        fm = _frontmatter()
+        assert fm.get("name"), "name is required"
+        assert fm.get("description"), "description is required"
+
+    def test_name_matches_the_spec_constraints(self):
+        """Max 64 characters. Lowercase letters, numbers and hyphens only. Must
+        not start or end with a hyphen."""
+        name = _frontmatter()["name"]
+        assert len(name) <= 64, f"name is {len(name)} chars, spec max is 64"
+        assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name), \
+            f"{name!r} is not lowercase-hyphen-only, or starts/ends with a hyphen"
+
+    def test_description_is_within_the_spec_limit(self):
+        d = _frontmatter()["description"]
+        assert d.strip(), "description must be non-empty"
+        assert len(d) <= 1024, f"description is {len(d)} chars, spec max is 1024"
+
+    def test_compatibility_is_within_the_spec_limit(self):
+        c = _frontmatter().get("compatibility", "")
+        assert len(c) <= 500, f"compatibility is {len(c)} chars, spec max is 500"
+
+    def test_metadata_is_a_flat_string_map(self):
+        """Spec: 'a map from string keys to string values'. A nested structure
+        here parses for us and is invalid for a stricter client."""
+        md = _frontmatter().get("metadata", {})
+        assert isinstance(md, dict) and md, "metadata should carry the extras"
+        for k, v in md.items():
+            assert isinstance(k, str) and isinstance(v, str), f"{k}={v!r} is not string to string"
+
+    def test_declared_license_matches_the_bundled_one(self):
+        """`license` is a spec field. Declaring one the repo does not ship is
+        worse than declaring none, because it is checkable and wrong."""
+        declared = _frontmatter().get("license", "")
+        assert declared, "license should be declared for a skill meant to be installed"
+        bundled = (SKILL_MD.parent.parent.parent / "LICENSE").read_text()
+        assert declared.lower() in bundled.lower().split("\n")[0].lower(), \
+            f"frontmatter says {declared!r}, LICENSE says {bundled.splitlines()[0]!r}"
+
+
+class TestSkillMdMatchesTheCode:
+    """The drift catcher. SKILL.md is prose about a program, and the whole of
+    the 2026-09-09 audit was prose that had stopped being true."""
+
+    MODES_RE = re.compile(r"^## Modes$.*?^```bash\n(.*?)^```", re.M | re.S)
+
+    def _documented_modes(self):
+        m = self.MODES_RE.search(SKILL_MD.read_text())
+        assert m, "SKILL.md has no '## Modes' block with a bash fence"
+        return {line.split()[2] for line in m.group(1).splitlines()
+                if line.startswith("python3 scripts/news_desk.py ") and len(line.split()) > 2}
+
+    def _registered_modes(self):
+        src = Path(SCRIPT).read_text()
+        return set(re.findall(r'sub\.add_parser\(\s*"([a-z]+)"', src))
+
+    def test_every_registered_mode_is_documented(self):
+        missing = self._registered_modes() - self._documented_modes()
+        assert not missing, f"modes the CLI has and the Modes block omits: {sorted(missing)}"
+
+    def test_every_documented_mode_exists(self):
+        """The other direction: a mode removed from the code but left in the
+        docs sends a reader to a command that errors."""
+        extra = self._documented_modes() - self._registered_modes()
+        assert not extra, f"modes documented but not registered: {sorted(extra)}"
+
+    def test_the_readme_lists_every_mode_too(self):
+        """The README carries its own mode list and a count. It drifts by exactly
+        the same mechanism SKILL.md did, and a reader who never opens SKILL.md
+        sees only this one."""
+        readme = (SKILL_MD.parent.parent.parent / "README.md").read_text()
+        missing = sorted(m for m in self._registered_modes() if f"`{m}`" not in readme)
+        assert not missing, f"modes the CLI has and the README omits: {missing}"
+        n = len(self._registered_modes())
+        assert f"{n} modes" in readme, f"README should say '{n} modes'; the count moved"
+
+    def test_the_script_it_names_exists(self):
+        for ref in re.findall(r"scripts/([a-z_]+\.py)", SKILL_MD.read_text()):
+            assert (SKILL_MD.parent / "scripts" / ref).exists(), f"SKILL.md names a missing {ref}"
+
+    def test_the_read_only_contract_is_stated(self):
+        """This skill's one hard promise, asserted as a POSITIVE claim.
+
+        The first version of this test scanned for write verbs and called any
+        line containing one a contradiction. It fired immediately on a sentence
+        describing the SERVER rejecting writes, which is the promise being kept,
+        not broken. An extractor that cannot tell an explanation from an
+        advertisement reports the fix as the defect, which is the hazard
+        live-neon's own scanner documents. The code-side contract is enforced by
+        TestReadOnlyContract, which reads the source rather than the prose."""
+        text = SKILL_MD.read_text()
+        assert "READ ONLY" in text or "read-only" in text.lower(), \
+            "SKILL.md must state the read-only direction somewhere"
+        assert "never submits" in text or "only consumes" in text.lower(), \
+            "SKILL.md must say plainly that it does not write back"
 
 
 if __name__ == "__main__":

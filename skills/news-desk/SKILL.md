@@ -1,11 +1,23 @@
 ---
 name: news-desk
 description: >-
-  Read-only research client for the alaskanews.com public API. Pull published Alaska News
-  articles, meeting transcripts, public events, and prior coverage into your own work, under
-  the site's stated terms. For external Alaska creators: community journalists, bloggers, and
-  civic writers. Use when you want to build on Alaska News reporting, cite prior coverage, find
-  upcoming public meetings, hearings and comment deadlines, or work a story across the five Ws.
+  Read-only research client for a Communities News newsroom API, alaskanews.com by default.
+  Pull published articles, meeting transcripts, public events, and prior coverage into your
+  own work, under the newsroom's own stated terms. For external creators: community
+  journalists, bloggers, and civic writers. Use when you want to build on this reporting,
+  cite prior coverage, find upcoming public meetings, hearings and comment deadlines, or
+  work a story across the five Ws.
+license: MIT
+compatibility: >-
+  Python 3.9+, standard library only, no third-party packages. Needs network access to a
+  Communities News newsroom (alaskanews.com unless NEWS_SITE says otherwise) and, for every
+  mode except digest, that newsroom's own cn_ API key in NEWS_DESK_API_KEY.
+allowed-tools: Bash
+metadata:
+  version: "1.1.0"
+  author: Communities News LLC
+  homepage: https://github.com/news-community/news-skills
+  repository: news-community/news-skills
 ---
 
 # news-desk
@@ -137,6 +149,7 @@ python3 scripts/news_desk.py check
 ## Modes
 
 ```bash
+python3 scripts/news_desk.py check                               # what does MY key reach? (run first)
 python3 scripts/news_desk.py digest                              # recent stories (no key)
 python3 scripts/news_desk.py browse --sort new                   # what has been PUBLISHED (no query)
 python3 scripts/news_desk.py search "port of alaska settlement"  # --corpus, --since, --until
@@ -325,3 +338,18 @@ reach the API as `date_from`/`date_to`, that the corpus help names all eight cor
 cookie-session endpoints are described as unreachable-by-any-key rather than role-gated, and that
 `rag` and `article <id>` render instead of dumping JSON. Only the single live API call per mode is
 untestable without a key, which is why it is kept as thin as possible.
+
+**They also test this file.** Everything above tests the Python client; nothing tested the document
+that IS the skill, which is what an agent loads. It had already drifted: `check` was a registered
+mode missing from the Modes block, found by the first run of the test written to look for it. The
+checks are conformance to the [Agent Skills spec](https://agentskills.io/specification) (name shape
+and 64-char limit, description non-empty and under 1024, `compatibility` under 500, `metadata` a flat
+string map, and a declared `license` that matches the bundled `LICENSE`), plus parity in both
+directions between the modes the CLI registers and the modes this file and the README document.
+
+One of those tests is worth knowing about because its first version was wrong. It scanned for write
+verbs and called any line containing one a contradiction of the read-only contract, and it fired
+immediately on a sentence describing the *server* rejecting writes, which is the promise being kept.
+An extractor that cannot tell an explanation from an advertisement reports the fix as the defect. It
+now asserts the positive claim instead, and the code-side contract is enforced separately by reading
+the source rather than the prose.
