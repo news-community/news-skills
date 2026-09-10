@@ -8,7 +8,7 @@ labels: bug
 **Command:**
 
 ```
-python3 skills/alaska-desk/scripts/alaska_desk.py ...
+python3 skills/news-desk/scripts/news_desk.py ...
 ```
 
 **What happened** (paste the output; add `--json` if the rendering looks wrong, since that shows the

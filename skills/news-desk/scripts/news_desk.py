@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-alaska_desk.py, a READ-ONLY research client for a Communities News newsroom API.
+news_desk.py, a READ-ONLY research client for a Communities News newsroom API.
 
 For external creators (community journalists, bloggers, civic writers) to pull
 published articles, meeting transcripts, public events, and prior-coverage RAG
@@ -52,9 +52,9 @@ SKILL.md's "Working the story" section.
 
 Auth + HTTP + env plumbing is inlined below; stdlib only, no dependencies.
 
-    NEWS_DESK_API_KEY=cn_...  python3 alaska_desk.py search "port of alaska settlement"
-    python3 alaska_desk.py digest            # no key needed
-    python3 alaska_desk.py check             # what can my key reach?
+    NEWS_DESK_API_KEY=cn_...  python3 news_desk.py search "port of alaska settlement"
+    python3 news_desk.py digest            # no key needed
+    python3 news_desk.py check             # what can my key reach?
 """
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ from pathlib import Path
 
 DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
-UA = "community-news-desk/1.1"
+UA = "news-desk/1.1"
 
 
 def site():
@@ -552,7 +552,7 @@ def _guided(fn):
             sys.exit(
                 "Not authorized (401). This mode needs your alaskanews API key (starts with 'cn_').\n"
                 f"  Recovery: echo '{KEY_ENV}=cn_...' >> .env.local\n"
-                "  Then: python3 alaska_desk.py check\n"
+                "  Then: python3 news_desk.py check\n"
                 "  Get a key at alaskanews.com/profile/settings."
             )
         if e.code == 403:

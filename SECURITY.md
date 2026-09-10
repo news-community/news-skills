@@ -15,7 +15,7 @@ should not wait for us. Then create a replacement with **Read-only** ticked: a r
 rejected by the server on every write method before a handler runs, so a leaked one cannot be used
 to damage the newsroom.
 
-Do not paste a key into an issue. `alaska_desk.py check` is safe to paste; it prints reachability
+Do not paste a key into an issue. `news_desk.py check` is safe to paste; it prints reachability
 statuses and never the key.
 
 ## Two behaviours worth knowing before you run it

@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] `python3 -m pytest skills/alaska-desk/scripts/test_alaska_desk.py -q` passes.
+- [ ] `python3 -m pytest skills/news-desk/scripts/test_news_desk.py -q` passes.
 - [ ] Still read-only: no `PATCH`/`PUT`/`DELETE`, and no new `POST` beyond `/rag/query`.
 - [ ] If this fixes a defect, I added the test that would have caught it, and checked it **fails**
       without the fix.

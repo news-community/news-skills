@@ -5,7 +5,7 @@ alaskanews.com public API. Contributions are welcome, with one hard rule and one
 
 ## The hard rule: this stays read-only
 
-`skills/alaska-desk` is a **consumer** client. It must never `PATCH`, `PUT` or `DELETE`, and its
+`skills/news-desk` is a **consumer** client. It must never `PATCH`, `PUT` or `DELETE`, and its
 only `POST` is the read-only `/rag/query`. Two things enforce that, and a change that trips either
 will not be merged:
 
@@ -38,7 +38,7 @@ So if you add or change a mode, or write anything about what an endpoint returns
 
 ```bash
 pip install pytest
-python3 -m pytest skills/alaska-desk/scripts/test_alaska_desk.py -q
+python3 -m pytest skills/news-desk/scripts/test_news_desk.py -q
 ```
 
 Offline: no key, no network. CI runs them on Python 3.9, 3.11 and 3.13.
@@ -62,4 +62,4 @@ that would have caught it, and check that the test actually fails without your f
 
 If you would rather just tell us something is wrong, that is genuinely useful, especially
 **"my key cannot reach X"**. Reach varies by role and we cannot see your key. Open an issue with the
-output of `alaska_desk.py check`, which is safe to paste: it prints statuses, never your key.
+output of `news_desk.py check`, which is safe to paste: it prints statuses, never your key.

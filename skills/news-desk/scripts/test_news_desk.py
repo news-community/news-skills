@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Offline tests for alaska_desk.py.
+Offline tests for news_desk.py.
 
 The live API needs a per-user cn_ key, so the network path is unverified here (as
 with any live-network path). Everything that does NOT touch the network is tested:
 arg parsing, URL/param construction, the license reminder, and that keyed modes
 fail with guidance rather than a traceback.
 
-    python3 -m pytest test_alaska_desk.py -q
+    python3 -m pytest test_news_desk.py -q
 """
 import subprocess
 import sys
@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import alaska_desk as ad  # noqa: E402
+import news_desk as ad  # noqa: E402
 
-SCRIPT = str(Path(__file__).resolve().parent / "alaska_desk.py")
+SCRIPT = str(Path(__file__).resolve().parent / "news_desk.py")
 
 
 def run(*args, env=None):

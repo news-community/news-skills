@@ -24,9 +24,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install pytest
       - name: Run the offline suite
-        run: python -m pytest skills/alaska-desk/scripts/test_alaska_desk.py -q
+        run: python -m pytest skills/news-desk/scripts/test_news_desk.py -q
       - name: The read-only contract, checked without importing anything
         # A grep, not a test: if the module ever fails to import, the in-suite
         # version of this check would be skipped rather than failed.
         run: |
-          ! grep -nE '"(PATCH|PUT|DELETE)"' skills/alaska-desk/scripts/alaska_desk.py
+          ! grep -nE '"(PATCH|PUT|DELETE)"' skills/news-desk/scripts/news_desk.py

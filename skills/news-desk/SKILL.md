@@ -1,5 +1,5 @@
 ---
-name: alaska-desk
+name: news-desk
 description: >-
   Read-only research client for the alaskanews.com public API. Pull published Alaska News
   articles, meeting transcripts, public events, and prior coverage into your own work, under
@@ -8,7 +8,7 @@ description: >-
   upcoming public meetings, hearings and comment deadlines, or work a story across the five Ws.
 ---
 
-# alaska-desk
+# news-desk
 
 > **A read-only research client for the alaskanews.com public API**, for external Alaska
 > creators, community journalists, bloggers, and civic writers, to pull published articles,
@@ -17,7 +17,7 @@ description: >-
 
 **This skill only consumes.** It never submits, edits, or writes back to the platform.
 Submitting content into the newsroom is a separate, editor-authenticated workflow that is not
-part of this tool. alaska-desk is for people building on Alaska News reporting from the outside.
+part of this tool. news-desk is for people building on Alaska News reporting from the outside.
 
 ---
 
@@ -30,7 +30,7 @@ part of this tool. alaska-desk is for people building on Alaska News reporting f
 | **Auth** | **your own** `cn_` API key (`NEWS_DESK_API_KEY`), ideally created **read-only**. `digest` needs none. |
 | **Output** | rendered markdown by default (paste into your draft), `--json` for raw. Every response carries the site's usage terms. |
 | **Newsroom** | alaskanews.com by default, and that is a DEFAULT not a limit: `NEWS_SITE` + `NEWS_COMMUNITY` point it elsewhere. |
-| **Runs on** | [`scripts/alaska_desk.py`](scripts/alaska_desk.py), Python 3, standard library only, no dependencies. |
+| **Runs on** | [`scripts/news_desk.py`](scripts/news_desk.py), Python 3, standard library only, no dependencies. |
 
 **It is not** a content generator. It produces *source material* that you turn into your own
 article, script, or post.
@@ -129,7 +129,7 @@ directly on top of that. It reports whether your key is **read-only**, your role
 endpoints no key reaches and the ones a membership would unlock. It takes about five seconds:
 
 ```bash
-python3 scripts/alaska_desk.py check
+python3 scripts/news_desk.py check
 ```
 
 ---
@@ -137,20 +137,20 @@ python3 scripts/alaska_desk.py check
 ## Modes
 
 ```bash
-python3 scripts/alaska_desk.py digest                              # recent stories (no key)
-python3 scripts/alaska_desk.py browse --sort new                   # what has been PUBLISHED (no query)
-python3 scripts/alaska_desk.py search "port of alaska settlement"  # --corpus, --since, --until
-python3 scripts/alaska_desk.py angles "port of alaska" --intent track  # discovery: fix 2 Ws, expand the rest
-python3 scripts/alaska_desk.py article <id | slug | url>           # full article
-python3 scripts/alaska_desk.py transcript <source-id>              # meeting transcript
-python3 scripts/alaska_desk.py events                              # what is coming UP (next 30 days)
-python3 scripts/alaska_desk.py rag "public comment deadlines"      # answer + traceable citations
-python3 scripts/alaska_desk.py clip <clip-id>                      # resolve a known clip id to its MP4 URL
-python3 scripts/alaska_desk.py communities                         # slugs valid for --community
-python3 scripts/alaska_desk.py people "dunleavy"                   # the Who axis: named speakers
-python3 scripts/alaska_desk.py person <person-id>                  # one actor + the coverage they appear in
-python3 scripts/alaska_desk.py topics                              # the broad beats
-python3 scripts/alaska_desk.py tags "port" --category organization # the subject vocabulary
+python3 scripts/news_desk.py digest                              # recent stories (no key)
+python3 scripts/news_desk.py browse --sort new                   # what has been PUBLISHED (no query)
+python3 scripts/news_desk.py search "port of alaska settlement"  # --corpus, --since, --until
+python3 scripts/news_desk.py angles "port of alaska" --intent track  # discovery: fix 2 Ws, expand the rest
+python3 scripts/news_desk.py article <id | slug | url>           # full article
+python3 scripts/news_desk.py transcript <source-id>              # meeting transcript
+python3 scripts/news_desk.py events                              # what is coming UP (next 30 days)
+python3 scripts/news_desk.py rag "public comment deadlines"      # answer + traceable citations
+python3 scripts/news_desk.py clip <clip-id>                      # resolve a known clip id to its MP4 URL
+python3 scripts/news_desk.py communities                         # slugs valid for --community
+python3 scripts/news_desk.py people "dunleavy"                   # the Who axis: named speakers
+python3 scripts/news_desk.py person <person-id>                  # one actor + the coverage they appear in
+python3 scripts/news_desk.py topics                              # the broad beats
+python3 scripts/news_desk.py tags "port" --category organization # the subject vocabulary
 ```
 
 **Two vocabularies, and they are not the same.** `topics` is the ~15 broad beats (Health, Education,
@@ -313,7 +313,7 @@ unwrapped is write-side or editor-only, and out of scope by design.
 
 ```bash
 pip install pytest
-python3 -m pytest scripts/test_alaska_desk.py -q   # offline; no key, no network
+python3 -m pytest scripts/test_news_desk.py -q   # offline; no key, no network
 ```
 
 No key and no network required. The tests cover arg parsing, the read-only contract (no write
