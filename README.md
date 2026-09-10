@@ -22,7 +22,7 @@ back to the platform.
 python3 skills/alaska-desk/scripts/alaska_desk.py digest
 
 # 2. Get a key at alaskanews.com/profile/settings -- TICK "READ-ONLY" -- then:
-export ALASKA_DESK_API_KEY=cn_...
+export NEWS_DESK_API_KEY=cn_...
 
 # 3. See what your key reaches:
 python3 skills/alaska-desk/scripts/alaska_desk.py check
@@ -47,6 +47,13 @@ query is an HTTP `POST`.)
 Python 3, standard library only. No dependencies to install for the tool itself. Verified on 3.11,
 3.13 and 3.14; CI also runs 3.9, the intended floor. See
 [`skills/alaska-desk/SKILL.md`](skills/alaska-desk/SKILL.md) for the full guide.
+
+## Other newsrooms
+
+alaskanews.com is the **default**, not a limit. The platform is multi-community by design, so
+`NEWS_SITE` and `NEWS_COMMUNITY` point the same tool at another newsroom on it, and the usage terms
+are read from whichever newsroom you point at rather than baked in. Today Alaska is the only one
+live, so this is a door rather than a road.
 
 ## Tests
 

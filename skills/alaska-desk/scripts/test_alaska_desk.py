@@ -29,15 +29,28 @@ def run(*args, env=None):
     # to "" blocks that (the key "exists" so setdefault won't override) and reads
     # as no-key. A test wanting a specific key overrides via env=.
     e["ALASKA_DESK_API_KEY"] = ""
+    e["NEWS_DESK_API_KEY"] = ""
+    # Terms are fetched from the configured site; keep tests on the default and
+    # off any operator override that would change what they assert.
+    e.pop("NEWS_SITE", None)
+    e.pop("NEWS_COMMUNITY", None)
     if env:
         e.update(env)
     return subprocess.run([sys.executable, SCRIPT, *args], capture_output=True, text=True, env=e)
 
 
 class TestLicenseDiscipline:
-    def test_license_note_names_the_terms(self):
+    def test_terms_are_read_from_the_newsroom_not_compiled_in(self, monkeypatch):
+        """LICENSE_NOTE was a constant reciting one newsroom's stance. Pointed at
+        a second newsroom it would have printed Alaska's terms over their work,
+        which is the one staleness bug in this client with an ethical edge."""
+        monkeypatch.setattr(ad, "_TERMS_CACHE", {})
+        monkeypatch.setattr(ad, "content_signal",
+                            lambda s, timeout=10: "ai-train=no, search=yes, ai-input=yes")
+        note = ad.terms_note()
         for term in ("ai-train=no", "attribution", "backlink"):
-            assert term in ad.LICENSE_NOTE
+            assert term in note
+        assert not hasattr(ad, "LICENSE_NOTE"), "the constant should be gone, not shadowed"
 
     def test_digest_output_carries_attribution(self):
         # digest hits the public markdown surface; skip if offline
@@ -72,7 +85,7 @@ class TestGracefulAuth:
         assert r.returncode != 0
         blob = r.stdout + r.stderr
         assert "Traceback" not in blob
-        assert "ALASKA_DESK_API_KEY" in blob
+        assert "NEWS_DESK_API_KEY" in blob
         assert "cn_" in blob
 
     def test_check_without_key_is_quiet_and_clean(self):
@@ -209,7 +222,7 @@ class TestHateoasEmitted:
         """New/incomplete state -> onboarding action first (guide's state table)."""
         no_key = ad._skill_next_steps("digest", _Args(), has_key=False)
         with_key = ad._skill_next_steps("digest", _Args(), has_key=True)
-        assert "ALASKA_DESK_API_KEY" in no_key[0][0], "no-key digest must lead with getting a key"
+        assert "NEWS_DESK_API_KEY" in no_key[0][0], "no-key digest must lead with getting a key"
         assert no_key != with_key, "next steps must adapt to whether a key is set"
 
     def test_footer_has_related_and_see_also(self, capsys):
@@ -424,7 +437,7 @@ class TestKeyBlindEndpointsAreNamedAsSuch:
         assert "/api/v1/clips" in r.stdout
 
     def test_they_are_not_probed_as_if_a_role_could_fix_them(self):
-        probed = [label for label, *_ in ad.KEYED_PROBES]
+        probed = [label for label, *_ in ad.keyed_probes("alaska-news")]
         assert "clips (browse)" not in probed
 
     def test_403_recovery_no_longer_blames_a_clip_role(self):
@@ -708,7 +721,124 @@ class TestReachabilityRender:
     def test_rag_is_no_longer_probed(self):
         """/me reports rag's reachability, and probing it meant an 84s synthesis
         call on every `check`."""
-        assert not any(p == "/rag/query" for _, _, p, _, _ in ad.KEYED_PROBES)
+        assert not any(p == "/rag/query" for _, _, p, _, _ in ad.keyed_probes("x"))
+
+
+
+class TestNewsroomAgnostic:
+    """Alaska is the DEFAULT, not the design. Four constants kept this client
+    Alaska-only; they are configuration now, so a second newsroom on the same
+    platform is a setting rather than a fork."""
+
+    def test_site_and_community_come_from_env(self, monkeypatch):
+        monkeypatch.setenv("NEWS_SITE", "https://example.news/")
+        monkeypatch.setenv("NEWS_COMMUNITY", "elsewhere")
+        assert ad.site() == "https://example.news", "a trailing slash must not double up"
+        assert ad.default_community() == "elsewhere"
+
+    def test_defaults_are_still_alaska(self, monkeypatch):
+        monkeypatch.delenv("NEWS_SITE", raising=False)
+        monkeypatch.delenv("NEWS_COMMUNITY", raising=False)
+        assert ad.site() == "https://alaskanews.com"
+        assert ad.default_community() == "alaska-news"
+
+    def test_api_base_is_derived_from_the_site(self, monkeypatch):
+        monkeypatch.delenv("PLATFORM_API_BASE", raising=False)
+        monkeypatch.setenv("NEWS_SITE", "https://example.news")
+        assert ad.api_base() == "https://example.news/api/v1"
+
+    def test_platform_api_base_still_overrides_outright(self, monkeypatch):
+        monkeypatch.setenv("NEWS_SITE", "https://example.news")
+        monkeypatch.setenv("PLATFORM_API_BASE", "http://127.0.0.1:9/v2")
+        assert ad.api_base() == "http://127.0.0.1:9/v2"
+
+    def test_the_old_key_env_still_works(self, monkeypatch):
+        """Renaming it without honouring the old name would break every existing
+        setup silently, reported as 'no key set'."""
+        monkeypatch.delenv("NEWS_DESK_API_KEY", raising=False)
+        monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_legacy")
+        assert ad.read_key() == "cn_legacy"
+
+    def test_the_new_key_env_wins_when_both_are_set(self, monkeypatch):
+        monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_old")
+        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_new")
+        assert ad.read_key() == "cn_new"
+
+    def test_no_market_is_compiled_into_a_request_path(self, monkeypatch):
+        """The probes hard-coded `alaska-news`, so `check --community X` reported
+        on Alaska while saying it had checked X."""
+        for _, _, _, params, _ in ad.keyed_probes("elsewhere"):
+            if params and "community" in params:
+                assert params["community"] == "elsewhere"
+
+    def test_see_also_follows_the_configured_newsroom(self, monkeypatch):
+        monkeypatch.setenv("NEWS_SITE", "https://example.news")
+        assert "example.news" in ad.see_also() and "alaskanews" not in ad.see_also()
+
+
+class TestTermsAreReadNotAsserted:
+    """The terms line is printed under someone else's reporting, and the
+    attribution is the consideration for using it. Getting it from a constant
+    meant a second newsroom would have had Alaska's terms published over its
+    work."""
+
+    ROBOTS = "User-agent: *\nContent-Signal: ai-train=no, search=yes, ai-input=yes\nAllow: /\n"
+    LLMS = "Our robots.txt declares:\n\n- `ai-train=yes` do whatever\n- `ai-input=no` nope\n"
+
+    def _serve(self, monkeypatch, bodies):
+        """bodies: {path: text}; a path absent from the dict raises, as a 404 would."""
+        class _R:
+            def __init__(self, t): self.t = t
+            def read(self, *a): return self.t.encode()
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        def _open(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            for path, text in bodies.items():
+                if url.endswith(path):
+                    return _R(text)
+            raise ad.urllib.error.URLError("not found")
+        monkeypatch.setattr(ad, "_TERMS_CACHE", {})
+        monkeypatch.setattr(ad.urllib.request, "urlopen", _open)
+
+    def test_robots_content_signal_is_preferred(self, monkeypatch):
+        self._serve(monkeypatch, {"/robots.txt": self.ROBOTS, "/llms.txt": self.LLMS})
+        assert ad.content_signal("https://x.test") == "ai-train=no, search=yes, ai-input=yes"
+
+    def test_llms_txt_is_the_fallback(self, monkeypatch):
+        self._serve(monkeypatch, {"/llms.txt": self.LLMS})
+        got = ad.content_signal("https://x.test")
+        assert "ai-train=yes" in got and "ai-input=no" in got
+
+    def test_a_different_newsroom_gets_ITS_terms_not_alaskas(self, monkeypatch):
+        """The whole point. A newsroom that permits training and forbids quoting
+        must not have Alaska's opposite stance printed under its work."""
+        monkeypatch.setenv("NEWS_SITE", "https://other.news")
+        self._serve(monkeypatch, {"/llms.txt": self.LLMS})
+        note = ad.terms_note()
+        assert "other.news" in note
+        assert "ai-train=yes" in note
+        assert "Do not train on it." not in note
+        assert "Quote with attribution" not in note, "ai-input=no must not invite quoting"
+
+    def test_unreadable_terms_are_declared_not_invented(self, monkeypatch):
+        """A tool that cannot read the terms has no business asserting them, and
+        the old constant asserted them unconditionally."""
+        monkeypatch.setenv("NEWS_SITE", "https://silent.test")
+        self._serve(monkeypatch, {})
+        note = ad.terms_note()
+        assert "could NOT be read" in note
+        assert "ai-train" not in note, "no stance may be invented when none was readable"
+        assert "attribute with a backlink regardless" in note
+
+    def test_the_signal_is_fetched_once_per_site(self, monkeypatch):
+        calls = []
+        self._serve(monkeypatch, {"/robots.txt": self.ROBOTS})
+        real = ad.urllib.request.urlopen
+        monkeypatch.setattr(ad.urllib.request, "urlopen",
+                            lambda r, timeout=None: (calls.append(1), real(r, timeout))[1])
+        ad.content_signal("https://x.test"); ad.content_signal("https://x.test")
+        assert len(calls) == 1, "every rendered mode prints this; refetching per mode is waste"
 
 
 if __name__ == "__main__":

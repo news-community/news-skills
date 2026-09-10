@@ -27,8 +27,9 @@ part of this tool. alaska-desk is for people building on Alaska News reporting f
 |---|---|
 | **Audience** | external Alaska creators, one per key |
 | **Direction** | READ ONLY. No `PATCH` / `PUT` / `DELETE`; its only `POST` is the read-only RAG query. A test enforces this. |
-| **Auth** | **your own** `cn_` API key (`ALASKA_DESK_API_KEY`), ideally created **read-only**. `digest` needs none. |
+| **Auth** | **your own** `cn_` API key (`NEWS_DESK_API_KEY`), ideally created **read-only**. `digest` needs none. |
 | **Output** | rendered markdown by default (paste into your draft), `--json` for raw. Every response carries the site's usage terms. |
+| **Newsroom** | alaskanews.com by default, and that is a DEFAULT not a limit: `NEWS_SITE` + `NEWS_COMMUNITY` point it elsewhere. |
 | **Runs on** | [`scripts/alaska_desk.py`](scripts/alaska_desk.py), Python 3, standard library only, no dependencies. |
 
 **It is not** a content generator. It produces *source material* that you turn into your own
@@ -38,11 +39,19 @@ article, script, or post.
 
 ## Terms (read this before you publish anything from it)
 
-alaskanews.com declares its own machine-usage terms at `alaskanews.com/llms.txt`:
+**The terms are read from the newsroom on every run, not compiled in.** The client fetches
+`robots.txt`'s `Content-Signal` (the machine-readable location defined by contentsignals.org),
+falling back to `llms.txt`. alaskanews.com currently declares:
 
 - **`ai-train=no`** you may not train models on the content.
 - **`search=yes`** it may surface in AI-powered search.
 - **`ai-input=yes`** you may quote it **with attribution and a backlink**.
+
+That used to be a constant in the source. It is fetched now for two reasons. A newsroom can change
+its stance and a constant would keep reciting the old one. And pointed at a **different** newsroom, a
+constant would have printed Alaska's terms over somebody else's reporting, which for a tool whose
+whole ethic is "the attribution is the consideration" is the worst thing in the file. **If the terms
+cannot be read, the output says so and invents nothing.**
 
 Every mode prints that reminder under its output. It is not decoration: the person running this
 is republishing someone else's reporting, and the attribution + backlink is the consideration
@@ -65,13 +74,13 @@ without that mode.
 Then either export the key (works from anywhere):
 
 ```bash
-export ALASKA_DESK_API_KEY=cn_...
+export NEWS_DESK_API_KEY=cn_...
 ```
 
 or drop it in a gitignored `.env.local` next to the script (or in your project root):
 
 ```bash
-echo 'ALASKA_DESK_API_KEY=cn_...' >> scripts/.env.local
+echo 'NEWS_DESK_API_KEY=cn_...' >> scripts/.env.local
 ```
 
 Access is tiered on the platform side, and your key may not reach everything.
@@ -153,6 +162,24 @@ populated, so the client suppresses them rather than printing a zero that reads 
 **`browse` vs `search`.** `search` answers "what do you have about X". `browse` answers "what has
 been published", which is the question you ask before you know what X is. `--sort` takes
 `new`/`hot`/`top`/`popular`/`timeline`/`alphabetical`, and `--tag <slug>` lists a single beat.
+
+## Pointing it at another newsroom
+
+The platform behind alaskanews.com is multi-community by design: it maps a host to a community, and
+this client already took `--community` and a base-URL override. What kept it Alaska-only was four
+hard-coded constants, not its structure. They are settings now:
+
+```bash
+export NEWS_SITE=https://<host>        # the newsroom; the API base is derived from it
+export NEWS_COMMUNITY=<slug>           # default for --community
+export NEWS_DESK_API_KEY=cn_...        # your key (the old ALASKA_DESK_API_KEY still works)
+```
+
+**alaskanews.com remains the default**, and today it is the only newsroom live on this platform, so
+that default is also the whole of production. Nothing about a market is compiled in: the terms, the
+`See also` links, the reachability report and every request path follow whatever `NEWS_SITE` and
+`--community` say. `check` prints which newsroom and community it is reporting on, because a
+reachability report that does not name its subject is the kind of thing you read wrongly once.
 
 **Paging.** Every list mode takes `--limit` and `--offset`, and prints `showing 1-20 of 340` with the
 next `--offset` when there is more. A page that quietly drops the rest is how you conclude there are

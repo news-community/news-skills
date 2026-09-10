@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-alaska_desk.py, a READ-ONLY research client for the alaskanews.com public API.
+alaska_desk.py, a READ-ONLY research client for a Communities News newsroom API.
 
-For external Alaska creators (community journalists, bloggers, civic writers) to
-pull published articles, meeting transcripts, public events, and prior-coverage
-RAG into their OWN work. It never writes back to the platform: submitting content
+For external creators (community journalists, bloggers, civic writers) to pull
+published articles, meeting transcripts, public events, and prior-coverage RAG
+into their OWN work. It never writes back to the platform: submitting content
 back to the newsroom is a separate, editor-authenticated workflow, not this tool.
 
-Terms of use are the site's own, declared at alaskanews.com/llms.txt:
-`ai-train=no, search=yes, ai-input=yes` -> you may quote WITH attribution and a
-backlink; you may not train models on the content. Every mode's output carries
-that reminder, because the person running this is republishing someone else's
-reporting.
+DEFAULTS to alaskanews.com, which is the only newsroom live on this platform
+today. It is not limited to it: set NEWS_SITE and NEWS_COMMUNITY to point it at
+another one. Nothing about a market is compiled in.
+
+Terms of use are READ FROM THE NEWSROOM, per request, never assumed: robots.txt
+`Content-Signal` first (contentsignals.org), then llms.txt. Every mode's output
+carries them, because the person running this is republishing someone else's
+reporting, and the attribution is the consideration for using it. If the terms
+cannot be read, the output says so instead of inventing them.
 
 ## HATEOAS: every output points onward
 
@@ -26,7 +30,8 @@ where to go next, so no external map is needed.
 
 ## Auth: your own key, and only what it reaches
 
-Each user supplies their OWN `cn_` key (env `ALASKA_DESK_API_KEY`, or a `.env.local`
+Each user supplies their OWN `cn_` key (env `NEWS_DESK_API_KEY`, or the legacy
+`ALASKA_DESK_API_KEY`, or a `.env.local`
 next to this script). `digest` needs none; `search`/`angles`/`article`/`transcript`
 /`events`/`rag`/`communities` need a valid key. `check` reports what YOUR key can
 reach by ASKING the server: `GET /api/v1/me` returns a `reachability` block
@@ -47,7 +52,7 @@ SKILL.md's "Working the story" section.
 
 Auth + HTTP + env plumbing is inlined below; stdlib only, no dependencies.
 
-    ALASKA_DESK_API_KEY=cn_...  python3 alaska_desk.py search "port of alaska settlement"
+    NEWS_DESK_API_KEY=cn_...  python3 alaska_desk.py search "port of alaska settlement"
     python3 alaska_desk.py digest            # no key needed
     python3 alaska_desk.py check             # what can my key reach?
 """
@@ -57,6 +62,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import socket
 import sys
 import urllib.error
@@ -64,23 +70,122 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-SITE = "https://alaskanews.com"
-LICENSE_NOTE = (
-    "Source: alaskanews.com. Per its llms.txt: ai-train=no, search=yes, ai-input=yes. "
-    "Quote with attribution and a backlink; do not train on it."
-)
-UA = "alaska-desk/1.0"
+# --- which newsroom this is pointed at ------------------------------------------
+#
+# The platform behind alaskanews.com is multi-community by design (it maps a host
+# to a community), and this client already took `--community` and a base-URL
+# override. What kept it Alaska-only was four hard-coded constants, not its
+# structure. They are defaults now, so pointing it at another newsroom on the
+# same platform is configuration rather than a fork.
+#
+#     NEWS_SITE=https://<host>          the newsroom (API base is derived from it)
+#     NEWS_COMMUNITY=<slug>             default for --community
+#     NEWS_DESK_API_KEY=cn_...          your key
+#     PLATFORM_API_BASE=...             override only if the API is not at /api/v1
+
+DEFAULT_SITE = "https://alaskanews.com"
+DEFAULT_COMMUNITY = "alaska-news"
+UA = "community-news-desk/1.1"
+
+
+def site():
+    """The newsroom's origin. One knob: the API base is derived from it."""
+    return os.environ.get("NEWS_SITE", DEFAULT_SITE).rstrip("/")
+
+
+def default_community():
+    return os.environ.get("NEWS_COMMUNITY", DEFAULT_COMMUNITY)
+
+
+# The key's env var was ALASKA_DESK_API_KEY. Renaming it without honouring the old
+# name would break every existing setup silently, reported as "no key set", so the
+# old name still works and is the only reason this is two names rather than one.
+KEY_ENV = "NEWS_DESK_API_KEY"
+LEGACY_KEY_ENV = "ALASKA_DESK_API_KEY"
+
+
+def read_key():
+    return os.environ.get(KEY_ENV) or os.environ.get(LEGACY_KEY_ENV) or ""
+
+
 RELATED_MODES = ("digest · browse · search · angles · article · transcript · events · people · "
                  "person · topics · tags · rag · clip · communities · check")
-SEE_ALSO = ("SKILL.md  ·  full API: alaskanews.com/docs/api  ·  "
-            "machine spec: alaskanews.com/api/v1/openapi.json")
+def see_also():
+    host = urllib.parse.urlparse(site()).netloc or site()
+    return f"SKILL.md  ·  full API: {host}/docs/api  ·  machine spec: {host}/api/v1/openapi.json"
 
 
 # --- auth + HTTP + env plumbing (inlined; stdlib only, no dependencies) -------
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_API_BASE = "https://alaskanews.com/api/v1"
-DEFAULT_COMMUNITY = "alaska-news"
+
+
+def api_base():
+    """Derived from NEWS_SITE unless PLATFORM_API_BASE overrides it outright."""
+    return os.environ.get("PLATFORM_API_BASE") or f"{site()}/api/v1"
+
+
+# --- usage terms: read from the newsroom, never assumed ------------------------
+#
+# This used to be a constant reciting alaskanews.com's stance. That was the same
+# defect as the rest of this audit: a claim about the world, baked into source,
+# with nothing to notice when it changed. It is worse than the others, because
+# every mode prints it under someone else's reporting, and the attribution is the
+# consideration for using it. Pointed at a second newsroom, a constant would have
+# published Alaska's terms over their work.
+#
+# Read from robots.txt's `Content-Signal` (contentsignals.org, the canonical
+# machine-readable location), falling back to the `key=value` pairs in llms.txt.
+# If NEITHER can be read, the client says so rather than inventing terms: a tool
+# that cannot read the terms has no business asserting them.
+_TERMS_CACHE = {}
+_SIGNAL_RE = re.compile(r"([a-z][a-z-]*)\s*=\s*([a-z]+)")
+
+
+def content_signal(site_url, timeout=10):
+    """The newsroom's usage signals as an ordered `k=v, k=v` string, or None."""
+    if site_url in _TERMS_CACHE:
+        return _TERMS_CACHE[site_url]
+    found = None
+    for path, line_filter in (("/robots.txt", "content-signal:"), ("/llms.txt", None)):
+        try:
+            req = urllib.request.Request(site_url + path, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                text = r.read(65536).decode("utf-8", "replace")
+        except Exception:
+            continue
+        pairs = []
+        for line in text.splitlines():
+            low = line.lower()
+            if line_filter and line_filter not in low:
+                continue
+            if not line_filter and "`" not in line:
+                continue  # llms.txt states its signals in backticks
+            for k, v in _SIGNAL_RE.findall(low.split(":", 1)[-1] if line_filter else low):
+                if k in ("ai-train", "search", "ai-input") and (k, v) not in pairs:
+                    pairs.append((k, v))
+        if pairs:
+            found = ", ".join(f"{k}={v}" for k, v in pairs)
+            break
+    _TERMS_CACHE[site_url] = found
+    return found
+
+
+def terms_note():
+    """The line printed under every rendered output."""
+    s = site()
+    host = urllib.parse.urlparse(s).netloc or s
+    signal = content_signal(s)
+    if not signal:
+        return (f"Source: {host}. Its usage terms could NOT be read "
+                f"({host}/robots.txt and /llms.txt). Check them yourself before you "
+                "publish anything from this, and attribute with a backlink regardless.")
+    note = f"Source: {host}. Per its Content-Signal: {signal}."
+    if "ai-train=no" in signal:
+        note += " Do not train on it."
+    if "ai-input=yes" in signal:
+        note += " Quote with attribution and a backlink."
+    return note
 # Pseudo-statuses for failures that are not HTTP statuses. Negative so they can
 # never collide with a real code.
 NON_JSON = -1   # transport worked, payload was not JSON
@@ -119,18 +224,18 @@ def _load_env():
 
 def get_api_key():
     _load_env()
-    key = os.environ.get("ALASKA_DESK_API_KEY")
+    key = read_key()
     if not key:
-        print("Error: ALASKA_DESK_API_KEY not set.", file=sys.stderr)
+        print(f"Error: {KEY_ENV} not set.", file=sys.stderr)
         print("Create a key at alaskanews.com/profile/settings, then set it:", file=sys.stderr)
-        print("  export ALASKA_DESK_API_KEY=cn_...", file=sys.stderr)
-        print("  # or: echo 'ALASKA_DESK_API_KEY=cn_...' >> .env.local  (next to this script)", file=sys.stderr)
+        print(f"  export {KEY_ENV}=cn_...", file=sys.stderr)
+        print(f"  # or: echo '{KEY_ENV}=cn_...' >> .env.local  (next to this script)", file=sys.stderr)
         sys.exit(2)
     return key
 
 
 def api_request(method, path, params=None, body=None, timeout=60):
-    base = os.environ.get("PLATFORM_API_BASE", DEFAULT_API_BASE)
+    base = api_base()
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
@@ -175,7 +280,7 @@ def api_redirect(path, timeout=30):
     `/clips/<id>/stream` 302s to a public MP4. Following that gets you video
     bytes, which is not something a research client can render; the useful
     answer is the URL itself, which the caller can hand to a player or curl."""
-    base = os.environ.get("PLATFORM_API_BASE", DEFAULT_API_BASE)
+    base = api_base()
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
 
     class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -304,7 +409,7 @@ def _skill_next_steps(mode, args, has_key) -> list:
     if mode == "digest":
         steps = []
         if not has_key:
-            steps.append(("echo 'ALASKA_DESK_API_KEY=cn_...' >> .env.local ; then `check`",
+            steps.append((f"echo '{KEY_ENV}=cn_...' >> .env.local ; then `check`",
                           "digest is the only keyless mode; a key unlocks search, angles, transcripts, and rag"))
         steps += [
             ('search "<topic from a headline above>"',
@@ -315,7 +420,7 @@ def _skill_next_steps(mode, args, has_key) -> list:
         return steps
     if mode == "check":
         if not has_key:
-            return [("set ALASKA_DESK_API_KEY, then re-run `check`",
+            return [(f"set {KEY_ENV}, then re-run `check`",
                      "only `digest` works without a key; the rest report their reach once a key is set")]
         return [('search "<topic>"', "your key reached the search surface; start there"),
                 ('angles "<topic>" --intent similar', "or work a story across the five Ws"),
@@ -399,7 +504,7 @@ def _print_hateoas(mode, args, resp=None):
     """The CLI HATEOAS footer: surface the server's next_steps, then this skill's,
     then related modes + see-also. Never called in --json mode (machine consumers
     read next_steps from the payload)."""
-    has_key = bool(os.environ.get("ALASKA_DESK_API_KEY"))
+    has_key = bool(read_key())
     server = _server_next_steps(resp)
     if server:
         print("\nThe API points onward to:")
@@ -412,7 +517,7 @@ def _print_hateoas(mode, args, resp=None):
             print(f"  {action}")
             print(f"      {why}")
     print(f"\nRelated modes: {RELATED_MODES}")
-    print(f"See also: {SEE_ALSO}")
+    print(f"See also: {see_also()}")
 
 
 # --- helpers ----------------------------------------------------------------
@@ -436,7 +541,7 @@ def _guided(fn):
         return fn()
     except ApiError as e:
         if e.code == 401:
-            key = os.environ.get("ALASKA_DESK_API_KEY", "")
+            key = read_key()
             if key and not key.startswith("cn_"):
                 sys.exit(
                     f"Not authorized (401). Your key starts with {key[:4]!r}, but alaskanews API "
@@ -446,7 +551,7 @@ def _guided(fn):
                 )
             sys.exit(
                 "Not authorized (401). This mode needs your alaskanews API key (starts with 'cn_').\n"
-                "  Recovery: echo 'ALASKA_DESK_API_KEY=cn_...' >> .env.local\n"
+                f"  Recovery: echo '{KEY_ENV}=cn_...' >> .env.local\n"
                 "  Then: python3 alaska_desk.py check\n"
                 "  Get a key at alaskanews.com/profile/settings."
             )
@@ -487,20 +592,20 @@ def _emit(obj, args, render=None, mode=""):
     print(render(obj) if render else json.dumps(obj, indent=2, ensure_ascii=False))
     if mode:
         _print_hateoas(mode, args, obj)
-    print(f"\n---\n{LICENSE_NOTE}")
+    print(f"\n---\n{terms_note()}")
 
 
 # --- modes ------------------------------------------------------------------
 
 def cmd_digest(args):
     """Recent-stories markdown homepage. Public, no key. The on-ramp."""
-    md = fetch_markdown(SITE + "/")
+    md = fetch_markdown(site() + "/")
     if args.json:
         print(json.dumps({"markdown": md}, ensure_ascii=False))
         return
     print(md.rstrip())
     _print_hateoas("digest", args, None)
-    print(f"\n---\n{LICENSE_NOTE}")
+    print(f"\n---\n{terms_note()}")
 
 
 def cmd_article(args):
@@ -509,13 +614,13 @@ def cmd_article(args):
     ref = args.ref
     looks_like_path = ref.startswith("http") or "/" in ref
     if looks_like_path:
-        url = ref if ref.startswith("http") else f"{SITE}/c/{DEFAULT_COMMUNITY}/{ref}"
+        url = ref if ref.startswith("http") else f"{site()}/c/{args.community}/{ref}"
         if args.json:
             print(json.dumps({"markdown": fetch_markdown(url)}, ensure_ascii=False))
             return
         print(fetch_markdown(url).rstrip())
         _print_hateoas("article", args, None)
-        print(f"\n---\n{LICENSE_NOTE}")
+        print(f"\n---\n{terms_note()}")
     else:
         resp = _guided(lambda: api_request("GET", f"/articles/{ref}"))
 
@@ -533,7 +638,7 @@ def cmd_article(args):
             if meta:
                 head.append(meta)
             if a.get("slug"):
-                head.append(f"{SITE}/c/{args.community}/{a['slug']}")
+                head.append(f"{site()}/c/{args.community}/{a['slug']}")
             for label in ("tldr", "excerpt"):
                 if a.get(label):
                     head += ["", f"## {label}", str(a[label]).strip()]
@@ -759,7 +864,7 @@ def cmd_clip(args):
         print(f"# clip {args.clip_id}\nNo redirect (HTTP {r.get('status')}). "
               f"{r.get('body', '')[:300]}")
     _print_hateoas("clip", args, None)
-    print(f"\n---\n{LICENSE_NOTE}")
+    print(f"\n---\n{terms_note()}")
 
 
 def cmd_communities(args):
@@ -778,7 +883,7 @@ def cmd_communities(args):
         for c in rows:
             if not isinstance(c, dict):
                 continue
-            mark = "  <- default" if c.get("slug") == DEFAULT_COMMUNITY else ""
+            mark = "  <- default" if c.get("slug") == default_community() else ""
             out.append(f"- {c.get('slug', '?'):24} {c.get('name', '')}{mark}")
         out.append("\nPass one as --community <slug>.")
         return "\n".join(out)
@@ -909,7 +1014,7 @@ def cmd_person(args):
         out.append(f"\n{page}")
     print("\n".join(out))
     _print_hateoas("person", args, cov)
-    print(f"\n---\n{LICENSE_NOTE}")
+    print(f"\n---\n{terms_note()}")
 
 
 def cmd_topics(args):
@@ -1035,13 +1140,16 @@ def cmd_browse(args):
 #
 # `rag` was REMOVED from this list on 2026-09-09. /me reports it, and probing it
 # meant a synthesis call measured at 84s on every `check`.
-KEYED_PROBES = [
-    ("articles", "GET", "/articles", {"limit": 1, "community": "alaska-news"}, None),
-    ("search", "GET", "/search", {"q": "alaska", "community": "alaska-news", "limit": 1}, None),
-    ("transcripts", "GET", "/transcripts", {"limit": 1}, None),
-    ("calendar (events)", "GET", "/calendar", {"community": "alaska-news", "limit": 1}, None),
-    ("communities", "GET", "/communities", {"limit": 1}, None),
-]
+def keyed_probes(community):
+    """Built per call, because these used to hard-code `alaska-news`, which made
+    `check --community X` report on Alaska while saying it had checked X."""
+    return [
+        ("articles", "GET", "/articles", {"limit": 1, "community": community}, None),
+        ("search", "GET", "/search", {"q": "news", "community": community, "limit": 1}, None),
+        ("transcripts", "GET", "/transcripts", {"limit": 1}, None),
+        ("calendar (events)", "GET", "/calendar", {"community": community, "limit": 1}, None),
+        ("communities", "GET", "/communities", {"limit": 1}, None),
+    ]
 # KEY_BLIND_ENDPOINTS was deleted on 2026-09-09.
 #
 # It listed, by hand, the endpoints no API key reaches. It was correct when it
@@ -1132,22 +1240,23 @@ def cmd_check(args):
     before building on it. Mirrors the auth spike, and stays quiet when no key is
     set rather than erroring once per endpoint."""
     _load_env()
-    print("alaska-desk reachability:\n")
+    host = urllib.parse.urlparse(site()).netloc or site()
+    print(f"reachability: {host}, community {args.community}\n")
 
     try:
-        fetch_markdown(SITE + "/", timeout=15)
+        fetch_markdown(site() + "/", timeout=15)
         print(f"  {'digest (public)':26} OK")
     except ApiError as e:
         print(f"  {'digest (public)':26} {_STATUS.get(e.code, f'HTTP {e.code}')}")
 
-    key = os.environ.get("ALASKA_DESK_API_KEY")
+    key = read_key()
     if not key:
         print(f"  {'(keyed modes)':26} no key set")
     else:
         if not key.startswith("cn_"):
             print(f"  {'(key format)':26} WRONG: starts {key[:4]!r}, alaskanews keys start 'cn_'")
         key_ok = key.startswith("cn_")
-        for label, method, path, params, body in KEYED_PROBES:
+        for label, method, path, params, body in keyed_probes(args.community):
             try:
                 api_request(method, path, params=params, body=body, timeout=30)
                 status = "OK"
@@ -1174,7 +1283,7 @@ def cmd_check(args):
                 print(line)
 
     _print_hateoas("check", args, None)
-    print(f"\n---\n{LICENSE_NOTE}")
+    print(f"\n---\n{terms_note()}")
 
 
 def main():
@@ -1185,8 +1294,8 @@ def main():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--json", action="store_true",
                         help="Raw JSON (its next_steps are the machine HATEOAS)")
-    common.add_argument("--community", default=DEFAULT_COMMUNITY,
-                        help=f"Community slug (default {DEFAULT_COMMUNITY})")
+    common.add_argument("--community", default=default_community(),
+                        help=f"Community slug (default {default_community()})")
 
     ap = argparse.ArgumentParser(
         description="Read-only research client for the alaskanews.com public API (external consumers).",
