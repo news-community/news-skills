@@ -927,6 +927,24 @@ class TestSkillMdMeetsTheSpec:
         for k, v in md.items():
             assert isinstance(k, str) and isinstance(v, str), f"{k}={v!r} is not string to string"
 
+    def test_body_stays_inside_the_progressive_disclosure_budget(self):
+        """The spec recommends SKILL.md stay under 500 lines and 5,000 tokens,
+        because this body loads into the agent's context on every single run and
+        competes there with everything else.
+
+        Lines are exact. Tokens are a proxy: characters/4, the usual rough
+        heuristic, since a real tokenizer would be a dependency this stdlib-only
+        repo will not take. The proxy is stated rather than hidden because a
+        budget measured by proxy can be wrong at the margin, and being a little
+        conservative is the safe direction for a ceiling."""
+        text = SKILL_MD.read_text()
+        lines = len(text.splitlines())
+        approx_tokens = len(text) // 4
+        assert lines < 500, f"SKILL.md is {lines} lines, spec recommends under 500"
+        assert approx_tokens < 5000, (
+            f"SKILL.md is ~{approx_tokens} tokens (chars/4), spec recommends under 5,000. "
+            "Move reference material into references/ and tell the agent when to read it.")
+
     def test_declared_license_matches_the_bundled_one(self):
         """`license` is a spec field. Declaring one the repo does not ship is
         worse than declaring none, because it is checkable and wrong."""
@@ -976,6 +994,18 @@ class TestSkillMdMatchesTheCode:
     def test_the_script_it_names_exists(self):
         for ref in re.findall(r"scripts/([a-z_]+\.py)", SKILL_MD.read_text()):
             assert (SKILL_MD.parent / "scripts" / ref).exists(), f"SKILL.md names a missing {ref}"
+
+    def test_every_relative_link_resolves(self):
+        """Progressive disclosure only works if the file is actually there. A
+        dangling `references/...` link is worse than inline prose: the agent is
+        told to go read something and finds nothing."""
+        broken = []
+        for target in re.findall(r"\]\(([^)#][^)]*)\)", SKILL_MD.read_text()):
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            if not (SKILL_MD.parent / target).resolve().exists():
+                broken.append(target)
+        assert not broken, f"SKILL.md links to files that do not exist: {broken}"
 
     def test_the_read_only_contract_is_stated(self):
         """This skill's one hard promise, asserted as a POSITIVE claim.

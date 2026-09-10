@@ -24,6 +24,8 @@ paste here (redact anything you would rather not share)
 
 <!-- e.g. "search found this story, so browse --tag should list it too" -->
 
-**Before you file:** `GET /clips` (browsing the clip library) and `GET /transcripts/search`
-authenticate by cookie session only and reject *every* API key, including an admin's. Those two are
-known and are not a role you can be granted.
+**Before you file:** some endpoints authenticate by browser session only and reject *every* API
+key, including an admin's, so no role upgrade reaches them. They answer 403 with
+`error: session_auth_only`. `check` lists them, straight from the platform rather than from a list
+kept by hand here, under "Not reachable by ANY api key". If your endpoint is in that list, it is
+working as designed and there is nothing to file.

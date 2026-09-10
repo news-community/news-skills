@@ -1,7 +1,8 @@
 # Contributing
 
-Thanks for looking. This repo shares tools that external Alaska creators can point at the
-alaskanews.com public API. Contributions are welcome, with one hard rule and one habit.
+Thanks for looking. This repo shares tools that external creators can point at a Communities News
+newsroom API, alaskanews.com by default. Contributions are welcome, with one hard rule and one
+habit.
 
 ## The hard rule: this stays read-only
 
@@ -43,9 +44,49 @@ python3 -m pytest skills/news-desk/scripts/test_news_desk.py -q
 
 Offline: no key, no network. CI runs them on Python 3.9, 3.11 and 3.13.
 
-A new mode needs, at minimum: a test that it is a GET, a next-steps entry so it is not a dead end
-(`TestHateoasEmitted` will fail otherwise), and a rendering test. If you fix a defect, add the test
-that would have caught it, and check that the test actually fails without your fix.
+A new mode needs, at minimum:
+
+- a test that it is a GET (`TestReadSurfaceCoverage`),
+- a next-steps entry so it is not a dead end (`TestHateoasEmitted` will fail otherwise),
+- a rendering test,
+- **a line in `SKILL.md`'s Modes block and a mention in the README.** Parity is enforced in both
+  directions, so a mode you add without documenting fails the suite, and so does a mode you
+  document without adding. That check exists because `check` had already gone missing from the
+  Modes block and nothing noticed.
+
+If you fix a defect, add the test that would have caught it, and check that the test actually fails
+without your fix.
+
+## A test that was wrong first, kept as a warning
+
+One SKILL.md check scanned for write verbs and called any line containing one a contradiction of the
+read-only contract. It fired immediately on a sentence describing the *server* rejecting writes,
+which is the promise being kept, not broken. An extractor that cannot tell an explanation from an
+advertisement reports the fix as the defect.
+
+It asserts the positive claim now, and the code-side contract is enforced separately by reading the
+source rather than the prose. Worth knowing before you write the next prose-scanning check, because
+this repo is mostly prose about a program and the temptation recurs.
+
+## SKILL.md is a spec document, and the tests treat it as one
+
+`skills/news-desk/SKILL.md` follows the [Agent Skills
+specification](https://agentskills.io/specification), and `TestSkillMdMeetsTheSpec` asserts its
+constraints: `name` lowercase-and-hyphens under 64 characters, `description` non-empty and under
+1024, `compatibility` under 500, `metadata` a flat map of strings to strings, and a declared
+`license` that matches the bundled `LICENSE` file.
+
+Two things follow for anyone editing it:
+
+- **Extras belong under `metadata`.** The spec defines `name`, `description`, `license`,
+  `compatibility`, `metadata` and `allowed-tools` and nothing else. Fields like `homepage` or
+  `version` are not spec fields; they live inside `metadata`, which is where the spec puts
+  arbitrary extras. Other public skill repos put them at the top level. That is a registry
+  convention, not the standard.
+- **Keep it under 500 lines and 5,000 tokens**, which is what the specification recommends for the
+  body an agent loads on every run. Detailed reference material belongs in a `references/`
+  directory, loaded on demand, and the guidance is explicit that you must tell the agent *when* to
+  read it rather than gesturing at a folder.
 
 ## Style
 
@@ -54,8 +95,10 @@ that would have caught it, and check that the test actually fails without your f
   run.
 - Every mode ends with next steps, related modes and a see-also. No dead ends, and errors carry a
   recovery path rather than just a status.
-- Every output carries the source's usage terms. That is not decoration: the person running this is
-  republishing someone else's reporting.
+- Every output carries the newsroom's usage terms, **fetched from that newsroom at run time**, never
+  hardcoded. That is not decoration: the person running this is republishing someone else's
+  reporting, and a constant would print one newsroom's terms over another's work. If the terms
+  cannot be read, say so; do not fall back to a remembered stance.
 - No em dashes in prose or comments. Use commas, colons, parentheses, or two sentences.
 
 ## Reporting rather than fixing

@@ -1,12 +1,15 @@
 ---
 name: news-desk
 description: >-
-  Read-only research client for a Communities News newsroom API, alaskanews.com by default.
-  Pull published articles, meeting transcripts, public events, and prior coverage into your
-  own work, under the newsroom's own stated terms. For external creators: community
-  journalists, bloggers, and civic writers. Use when you want to build on this reporting,
-  cite prior coverage, find upcoming public meetings, hearings and comment deadlines, or
-  work a story across the five Ws.
+  Use when someone asks what a local newsroom has published, is about to cover, or has
+  reported before: what happened at a public meeting, when the next hearing or comment
+  deadline falls, who said something on the record, or what prior coverage exists to cite.
+  Reads published articles, meeting transcripts with speakers and timestamps, upcoming civic
+  events, a people directory, beats and traceable prior-coverage citations from a Communities
+  News newsroom API, alaskanews.com by default. Read-only: it never writes back. Reach for it
+  even when the request never says "API" or names the newsroom, as in "has anyone reported on
+  this", "when does the assembly next meet", "what did the mayor say about the port", "find
+  me what was written before", or "is there a public comment deadline coming up".
 license: MIT
 compatibility: >-
   Python 3.9+, standard library only, no third-party packages. Needs network access to a
@@ -128,13 +131,10 @@ hand; it does not any more, which is the point.
 Use `search --corpus transcripts` instead of `transcripts/search`, and get clip ids from `search` or
 an article.
 
-**A note on this table's provenance.** The per-mode rows marked 2026-07-23 came from a real external
-consumer key. The 2026-09-09 re-verification ran against an **elevated newsroom key**, which can
-confirm that an endpoint exists, answers, and returns the shape this client renders, but *cannot*
-confirm what a plain external key reaches. Rows are worded to keep those two claims apart. An
-earlier version of this table asserted that a plain external key saw the `external_documents` and
-`social_post` corpora; the platform has gated both to editor/admin since 2026-06-09, so that line
-was describing either a privileged key or a bug, and it has been removed rather than restated.
+**How much weight these rows carry.** They come from two passes with two different keys, and only
+one of them tells you about external reach. Read
+[`references/verification.md`](references/verification.md) before changing any claim here about what
+a key reaches. Run `check` for the only answer that is about *your* key.
 
 **Run `check` first.** It asks the server what your key reaches, and probes a handful of endpoints
 directly on top of that. It reports whether your key is **read-only**, your role per community, the
@@ -281,12 +281,10 @@ phrase with no matching published story behind it.
 
 ## Honest limits (as of 2026-09-09)
 
-- **What was verified, and with which key.** On **2026-07-23** every mode was run against a real
-  external `cn_` key: `digest`, `search`, `article`, `transcript` and `events` returned and rendered;
-  `rag` returned 403. On **2026-09-09** the modes were re-run against an **elevated newsroom key**,
-  which re-confirms that each endpoint exists, answers, and returns the shape this client renders,
-  but says nothing about what a plain external key reaches. Where those two claims differ, the table
-  above keeps them apart. Run `check` for the only answer that is about *your* key.
+- **What was verified, and with which key.** Two passes, 2026-07-23 with a real external key and
+  2026-09-09 with an elevated one, which prove different things. The detail is in
+  [`references/verification.md`](references/verification.md); `check` is the only answer about
+  *your* key.
 - **`rag` is role-gated and slow.** An external key saw 403. Where it is allowed, it synthesizes an
   answer over retrieved passages and measured **84 seconds** on 2026-09-09, so the client gives it a
   180s budget; a timeout is now reported as a timeout, not as "unreachable". Quote its **citations**
@@ -324,32 +322,11 @@ unwrapped is write-side or editor-only, and out of scope by design.
 
 ## Development
 
+Tests, the contribution rules and the SKILL.md conformance checks live in
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md) at the repo root. They are kept there rather than here on
+purpose: this file is loaded into an agent's context on every run, and how to run pytest is not
+something the agent needs in order to do the work.
+
 ```bash
-pip install pytest
 python3 -m pytest scripts/test_news_desk.py -q   # offline; no key, no network
 ```
-
-No key and no network required. The tests cover arg parsing, the read-only contract (no write
-verbs; the only POST is the read-only RAG query), the HATEOAS footer, the five-Ws intent grid, and a
-regression guard for each defect found in the 2026-09-09 audit: that `events` queries the
-date-ranged endpoint and opens its window at now, that a non-JSON reply raises a guided error rather
-than a decode traceback, that a timeout is not reported as unreachable, that `--since`/`--until`
-reach the API as `date_from`/`date_to`, that the corpus help names all eight corpora, that
-cookie-session endpoints are described as unreachable-by-any-key rather than role-gated, and that
-`rag` and `article <id>` render instead of dumping JSON. Only the single live API call per mode is
-untestable without a key, which is why it is kept as thin as possible.
-
-**They also test this file.** Everything above tests the Python client; nothing tested the document
-that IS the skill, which is what an agent loads. It had already drifted: `check` was a registered
-mode missing from the Modes block, found by the first run of the test written to look for it. The
-checks are conformance to the [Agent Skills spec](https://agentskills.io/specification) (name shape
-and 64-char limit, description non-empty and under 1024, `compatibility` under 500, `metadata` a flat
-string map, and a declared `license` that matches the bundled `LICENSE`), plus parity in both
-directions between the modes the CLI registers and the modes this file and the README document.
-
-One of those tests is worth knowing about because its first version was wrong. It scanned for write
-verbs and called any line containing one a contradiction of the read-only contract, and it fired
-immediately on a sentence describing the *server* rejecting writes, which is the promise being kept.
-An extractor that cannot tell an explanation from an advertisement reports the fix as the defect. It
-now asserts the positive claim instead, and the code-side contract is enforced separately by reading
-the source rather than the prose.

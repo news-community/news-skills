@@ -102,6 +102,7 @@ optional `scripts/` beside it.
 skills/news-desk/
   SKILL.md           # required: frontmatter + instructions
   scripts/           # optional: the client and its tests
+  references/        # optional: loaded on demand, not on every run
 ```
 
 The format was originally developed by Anthropic and released as an open standard, and has
@@ -114,6 +115,11 @@ The frontmatter here uses the spec's own fields, including `license`, `compatibi
 where the spec puts arbitrary extras. Tests assert the spec's constraints (name shape and
 length, description length, metadata being a flat string map) so the file cannot drift out of
 conformance quietly.
+
+The spec also recommends keeping `SKILL.md` under 500 lines and 5,000 tokens, since that body
+loads into an agent's context on every run. A test enforces that budget, and provenance that a
+reader may want but an agent never needs lives in
+[`references/`](skills/news-desk/references/) instead.
 
 ## Standalone
 
@@ -139,8 +145,9 @@ python3 -m pytest skills/news-desk/scripts/test_news_desk.py -q
 ```
 
 Offline: no key and no network required. CI runs them on every push, across Python 3.9-3.13.
-They cover the client, and also `SKILL.md` itself: its conformance to the Agent Skills spec,
-and that every mode the CLI registers is documented and every mode documented exists.
+They cover the client, and also `SKILL.md` itself: conformance to the Agent Skills spec, the
+progressive-disclosure size budget, that every relative link resolves, and parity in both
+directions between the modes the CLI registers and the modes this repo documents.
 
 ## Terms
 
@@ -151,6 +158,11 @@ train models on it) and **`ai-input=yes`** (you may quote it with attribution an
 Every command prints whatever the newsroom actually declares, and says so plainly if it cannot
 read them. If you publish anything sourced here, name the newsroom and link the source. Those
 content terms are separate from this repository's code license below.
+
+## Changelog
+
+[`CHANGELOG.md`](CHANGELOG.md) records what changed in each version, and is what the `version`
+in the skill's frontmatter refers to.
 
 ## License
 
