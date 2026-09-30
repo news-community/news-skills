@@ -3,14 +3,15 @@ name: local-news-api
 description: >-
   Use when someone asks what a local newsroom has published, is about to cover, or has
   reported before: what happened at a public meeting, when the next hearing or comment
-  deadline falls, who said something on the record, or what prior coverage exists to cite.
+  deadline falls, who said something on the record, what prior coverage exists to cite, what it
+  published on a given day, or what to gather before writing a story.
   Reads published articles, meeting transcripts with speakers and timestamps, upcoming civic
   events, a people directory, beats and traceable prior-coverage citations from a Communities
   News newsroom's public API, for example Alaska News at alaskanews.com (the default).
   Read-only: it never writes back. Reach for it
   even when the request never says "API" or names the newsroom, as in "has anyone reported on
   this", "when does the assembly next meet", "what did the mayor say about the port", "find
-  me what was written before", or "is there a public comment deadline coming up".
+  me what was written before", "what ran yesterday", or "brief me before I write about the port".
 license: MIT-0
 compatibility: >-
   Python 3.9+, standard library only, no third-party packages. Needs network access to a
@@ -18,7 +19,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.4.1"
+  version: "1.5.0"
   author: Communities News LLC
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -89,15 +90,15 @@ link the source.
 
 ## Auth: your own key, and only what it reaches
 
-Create a key in your account on the newsroom's site; for Alaska News, `alaskanews.com/profile/settings`. **Tick "Read-only" when you create it.**
+Create a key in your account on the newsroom's site; for Alaska News,
+[alaskanews.com/profile/settings](https://alaskanews.com/profile/settings). **Tick "Read-only"**, and
+know its one cost first: **`rag` will not work**, because its read-only query is an HTTP `POST`.
 
-That checkbox is the single most useful thing on this page for you. This client never writes, but
-that is a promise made by code you would have to read; a read-only key is enforced by the server,
-which rejects every `POST`/`PUT`/`PATCH`/`DELETE` before a handler runs. Same reach for everything
-here, and a key that cannot damage the newsroom even if you leak it, paste it into the wrong
-terminal, or hand it to an agent that turns out to be more creative than you wanted. The one
-exception is `rag`, whose read-only query is an HTTP `POST`, so tick read-only only if you can live
-without that mode.
+The guarantee a read-only key gives is concrete: the server rejects every `POST`/`PUT`/`PATCH`/`DELETE`
+before a handler runs, so the key cannot change anything, whatever code or agent holds it. This client
+never writes either, but that is a promise in code you would have to read. A read-only key is still a
+credential: if it leaks, whoever has it can read what it reaches and spend its rate limit, so revoke a
+leaked one at the same settings page.
 
 Then either export the key (works from anywhere):
 
@@ -116,9 +117,10 @@ Access is tiered on the platform side, and your key may not reach everything.
 
 | Mode | Reach | Note |
 |---|---|---|
-| `digest` | **public** | recent-stories markdown, no key. Re-verified 2026-09-09 |
+| `digest` | **public** | recent stories; `--date` for one day's, a summary each. Verified 2026-09-29 |
 | `search` | **any valid key** | six corpora; `external_documents` and `social_post` are editor/admin only |
 | `angles` | **any valid key** | discovery scaffold; runs on the `/search` surface |
+| `brief` | **any valid key** | research brief: one `/search`, arranged for a writer, then four blanks |
 | `article` | **public by URL/slug**, keyed by id | the id form returns the richer record |
 | `transcript` | **any valid key** | full meeting transcript with speakers + timestamps |
 | `events` | **any valid key** | `GET /calendar`, date-ranged. Re-verified 2026-09-09 |
@@ -163,13 +165,15 @@ python3 scripts/local_news_api.py check
 ```bash
 python3 scripts/local_news_api.py check                               # what does MY key reach? (run first)
 python3 scripts/local_news_api.py digest                              # recent stories (no key)
+python3 scripts/local_news_api.py digest --date today                 # one day's stories, a summary each (no key)
 python3 scripts/local_news_api.py browse --sort new                   # what has been PUBLISHED (no query)
 python3 scripts/local_news_api.py search "port of alaska settlement"  # --corpus, --since, --until
 python3 scripts/local_news_api.py angles "port of alaska" --intent track  # discovery: fix 2 Ws, expand the rest
+python3 scripts/local_news_api.py brief "port of alaska"             # research brief before writing (--out FILE)
 python3 scripts/local_news_api.py article <id | slug | url>           # full article
 python3 scripts/local_news_api.py transcript <source-id>              # meeting transcript
 python3 scripts/local_news_api.py events                              # what is coming UP (next 30 days)
-python3 scripts/local_news_api.py rag "public comment deadlines"      # answer + traceable citations
+python3 scripts/local_news_api.py rag "public comment deadlines"      # answer + citations (not with a read-only key)
 python3 scripts/local_news_api.py clip <clip-id>                      # resolve a known clip id to its MP4 URL
 python3 scripts/local_news_api.py communities                         # slugs valid for --community
 python3 scripts/local_news_api.py people "dunleavy"                   # the Who axis: named speakers
@@ -181,12 +185,23 @@ python3 scripts/local_news_api.py tags "port" --category organization # the subj
 **`topics` is the beats; `tags` is the whole vocabulary.** `topics` lists the topic-category tags
 (Government, Infrastructure, Health...) ranked by articles published, each naming its parent; counts
 do not roll up into the parent. `tags` searches every tag: `organization`, `topic` or `location`. A
-slug from either is what `browse --tag` takes. Both are public. (`topics` read the retired `/topics`
-endpoint until 1.3.0, whose counts were all zero.)
+slug from either is what `browse --tag` takes. Both are public.
 
 **`browse` vs `search`.** `search` answers "what do you have about X". `browse` answers "what has
 been published", which is the question you ask before you know what X is. `--sort` takes
 `new`/`hot`/`top`/`popular`/`timeline`/`alphabetical`, and `--tag <slug>` lists a single beat.
+
+**A day's stories: `digest --date`.** `today`, `yesterday` or `YYYY-MM-DD`: every story published
+that day, newest first, with time, place, one-line summary and link. It reads the public feed, so no
+key. Days are counted in the default newsroom's zone (Alaska News: America/Anchorage); for another
+newsroom pass `--tz <Area/City>`, or it counts in UTC and says so. The feed is ranked rather than
+chronological, so it scans to a week past the day, and says when its three-month cap stops it.
+
+**A research brief: `brief "<topic>"`.** The step before writing. One `/search` across everything
+your key reaches, in a writer's order (prior coverage, the meeting record, people on the record,
+events, beats), then four blanks to fill first: why it matters, whose voice is missing, what you will
+cite, and a premise check. Assembled, not generated: no model call, and the judgment is yours.
+`--out brief.md` also saves it, with the terms.
 
 ## Pointing it at another newsroom
 
@@ -217,35 +232,21 @@ Add `--json` for raw responses, `--community <slug>` to target a community other
 the only one of the five Ws the server can filter on, and it is the axis the `angles` intents talk
 about holding or expanding, so `--intent precedent --until 2020-01-01` is how you actually ask the
 question that intent describes. Result lines carry the date for the same reason: you cannot check
-the two-axis corroboration rule below against results whose dates are hidden.
+the two-axis relevance rule below against results whose dates are hidden.
 
 **`events` is forward-looking.** It reads `GET /calendar`, whose window starts now and runs 30 days
-(`--days` to change it, `--type meeting|public_notice|community_event|class` to narrow). It used to
-run `search --corpus events`, which ranks by relevance rather than date: on 2026-09-09 that returned
-15 of 15 meetings **already past** under a heading saying "upcoming", which is the one thing a
-hearing listing must never do. To search events by relevance across all time, including past ones,
+(`--days` to change it, `--type meeting|public_notice|community_event|class` to narrow), so it never
+lists a past meeting as upcoming. To search events by relevance across all time, including past ones,
 use `search "<q>" --corpus events`. `/calendar` has no full-text parameter, so a query argument to
 `events` filters the window client-side on title and location.
 
 ---
 
-## HATEOAS: every output points onward
+## Every output points onward
 
-The API and this client both follow a HATEOAS discipline (every response tells you where to go
-next), so you never hit a dead end or need an external map:
-
-- **It consumes the server's.** API responses carry a `next_steps` array; rendered output surfaces
-  it ("The API points onward to..."), and `--json` passes it through in the payload for machine
-  consumers.
-- **It emits its own.** Every mode ends with **Next steps** (prioritized, each with the *why*,
-  capped at five), the **Related modes**, and a **See also**. The suggestions are *state-driven*:
-  with no key, the top suggestion is to get one; after a `search`, they point at opening a result
-  or pulling its quotes.
-- **Errors carry recovery**, not just a status: a 403 explains *why* (clips/some corpora need an
-  editor role) and *what to do* (run `check`, stay on articles/transcripts).
-
-`--json` is the machine surface and stays valid JSON: the prose next-steps and the license reminder
-are omitted there, because a machine reads `next_steps` from the payload itself.
+Every mode ends with prioritized **Next steps** (each with its *why*), the related modes and a see-also,
+and errors carry a recovery rather than a bare status. `--json` is the machine surface and stays valid
+JSON. How that works, including the API's own `next_steps`: [`references/output.md`](references/output.md).
 
 ---
 
@@ -261,21 +262,21 @@ and they land on opposite sides of this tool's read-only line:
 
 `angles --intent` names which two Ws you fix:
 
-| Intent (the two Ws it fixes) | `--intent` | What runs underneath |
-|---|---|---|
-| similar stories / historical precedent (What + Why) | `similar`, `precedent` | search articles, then `rag` holds What+Why and varies When |
-| track a company or agency (Who + What) | `track` | search articles + transcripts for the actor; expand When |
-| local coverage (Where + What) | `local` | `--community <slug>` **is** the Where axis |
-| same narrative angle (Why + What) | `angle` | `rag` people/quotes: who is deploying the framing |
+| Intent (the two Ws it fixes) | `--intent` | Runs now: one `/search` over | Suggested next |
+|---|---|---|---|
+| similar stories (What + Why) | `similar` | articles | `rag` to hold What+Why and vary When |
+| historical precedent (What + Why) | `precedent` | articles, transcripts | `--until` an earlier year |
+| track a company or agency (Who + What) | `track` | articles, transcripts | the actor across more years |
+| local coverage (Where + What) | `local` | articles, events, transcripts | `--community <slug>` is the Where |
+| same narrative angle (Why + What) | `angle` | articles | `rag` on who is using the framing |
 
-`angles "<seed>" --intent <intent>` runs **one** framed level (a single `/search` across the corpora
-that intent implies) and hands back the nested-expansion plan as Next steps, so you drive the depth,
-not the key's rate limit.
+Each run is **one** `/search`; everything in the last column is a Next step you choose to run, so you
+drive the depth, not the key's rate limit.
 
-**The one rule to carry:** a match must agree on **two** axes before you trust it. A hit that shares
-only the topic is one-axis agreement (an anecdote); a hit that shares the topic **and** the actor is
-corroboration. That is why "cite a specific article, never a generic phrase" below is not fussiness:
-a single-keyword match is not yet a citation.
+**The one rule to carry:** two matching dimensions (the topic **and** the actor, say) tell you a piece
+is *relevant*; they do not make a claim *corroborated*. Several articles can repeat one underlying
+source. Verify a claim against an independent source, ideally the primary record, before you treat it
+as confirmed, and cite a specific piece, never "previously reported".
 
 ---
 
@@ -292,32 +293,23 @@ phrase with no matching published story behind it.
 
 ## Honest limits (as of 2026-09-09)
 
-- **What was verified, and with which key.** Two passes, 2026-07-23 with a real external key and
-  2026-09-09 with an elevated one, which prove different things. The detail is in
-  [`references/verification.md`](references/verification.md); `check` is the only answer about
-  *your* key.
+- **What was verified, with which key:** [`references/verification.md`](references/verification.md).
+  `check` is the only answer about *your* key.
 - **`rag` is role-gated and slow.** An external key saw 403. Where it is allowed, it synthesizes an
   answer over retrieved passages and measured **84 seconds** on 2026-09-09, so the client gives it a
-  180s budget; a timeout is now reported as a timeout, not as "unreachable". Quote its **citations**
+  180s budget, and a timeout is reported as one. Quote its **citations**
   (each carries a verbatim excerpt and a url), never its synthesized paragraph: the paragraph is a
   summary of someone else's reporting and is not itself attributable.
 - **You cannot browse clips or use `/transcripts/search` with any key.** Both are cookie-session
   endpoints, not role gates. See the auth section above.
-- **`angles`** rides the `/search` surface (one framed GET per run), so any valid key that reaches
-  `search` reaches it. Its suggested `rag` follow-ups inherit rag's role limit.
+- **`angles` and `brief`** each make one `/search` call, so any key that reaches `search` reaches
+  them. `angles`' suggested `rag` follow-ups inherit rag's role limit.
 - **Rate limits.** 300 reads/min per user (and 180 writes/min, which nothing here uses). A 429 is a
   back-off, not a permission problem.
-- **`--json` is the stable machine surface.** Renderers fall back to raw JSON if a payload shape ever
-  changes, and `--json` always gives you the untouched payload.
 - **This is not a submission tool.** If you want your work published *on* the newsroom, that is a
   newsroom workflow, not this.
 
 ### Not covered here, deliberately
-
-**`GET /feed` is not wrapped.** It returns byte-identical results to `browse --sort new` (compared
-directly on 2026-09-09) and accepts no `community` parameter, so for a consumer targeting a community
-it is the same mode with strictly less reach. A test pins its absence, so anyone adding it later has
-to delete that test and read this first.
 
 **`person` reports "appears in", not "quoted in", and the distinction is load-bearing.**
 `/persons/<id>/articles` returns a UNION: articles where an attribution matched the person's name,

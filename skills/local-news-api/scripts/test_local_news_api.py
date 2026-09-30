@@ -70,6 +70,7 @@ class TestModeDispatch:
             ("article", ["some-slug"]), ("transcript", ["src-id"]), ("events", []),
             ("rag", ["q"]), ("clip", ["clip-id"]), ("communities", []),
             ("people", []), ("person", ["pid"]), ("topics", []), ("tags", []), ("browse", []),
+            ("brief", ["topic"]),
         ]:
             # --help on a subparser exits 0 and proves the subcommand exists
             r = run(mode, "--help")
@@ -175,7 +176,15 @@ class TestAnglesDiscovery:
         steps = ad._skill_next_steps("angles", _Args(), has_key=True)
         blob = " ".join(a + " " + w for a, w in steps)
         assert "--intent" in blob, "angles should teach re-running with a different intent"
-        assert "SECOND axis" in blob, "the corroboration rule should surface in the plan"
+        assert "SECOND axis" in blob, "the relevance rule should surface in the plan"
+        assert "independent source" in blob, "relevance must not be passed off as corroboration"
+
+    def test_the_output_does_not_call_relevance_corroboration(self):
+        """Two matching dimensions make a piece relevant. Several pieces can repeat one
+        source, so they do not corroborate a claim (external review, 2026-09-30)."""
+        import inspect
+        src = inspect.getsource(ad.cmd_angles)
+        assert "Relevance, not corroboration" in src and "independent source" in src
 
 
 class _Args:
@@ -206,7 +215,7 @@ class TestHateoasEmitted:
     capped 3-5, and state-driven. This client must EMIT that."""
 
     MODES = ["digest", "check", "search", "angles", "article", "transcript", "events", "rag",
-             "clip", "communities", "people", "person", "topics", "tags", "browse"]
+             "clip", "communities", "people", "person", "topics", "tags", "browse", "brief"]
 
     @pytest.mark.parametrize("mode", MODES)
     def test_every_mode_has_next_steps_no_dead_end(self, mode):
@@ -546,13 +555,17 @@ class TestReadSurfaceCoverage:
         src = inspect.getsource(ad.cmd_person)
         assert re.findall(r'api_request\(\s*"([A-Z]+)"', src) == ["GET", "GET"]
 
-    def test_feed_is_deliberately_not_wrapped(self):
-        """/feed returns byte-identical results to /articles?sort=new and takes no
-        community param (checked 2026-09-09), so wrapping it would add a mode with
-        strictly less reach. If someone adds it later, they should have to delete
-        this test and read why first."""
+    def test_feed_is_read_only_by_the_keyless_day_reader(self):
+        """/feed was left unwrapped on 2026-09-09: it matched /articles?sort=new and
+        took no community param, so for a KEYED reader it was strictly less reach.
+        What changed the call is that /feed answers without a key and /articles does
+        not, so a keyless daily briefing can only come from /feed. It is used in one
+        place, as a public read, and nowhere a key would reach /articles instead."""
+        import inspect
         src = Path(SCRIPT).read_text()
-        assert '"/feed"' not in src
+        assert src.count('"/feed"') == 1
+        assert '"/feed"' in inspect.getsource(ad._read_day_from_feed)
+        assert "public=True" in inspect.getsource(ad._read_day_from_feed)
 
 
 class TestPersonRecordUnwrapping:
@@ -1621,6 +1634,229 @@ class TestTagCategoryFilterIsNotTakenOnTrust:
     def test_only_categories_the_server_filters_are_offered(self):
         assert set(ad.TAG_CATEGORIES) == {"organization", "topic", "location"}
         assert "election" not in run("tags", "--help").stdout.split("--category")[1][:80]
+
+
+class TestTimestamps:
+    """Python 3.9 is this client's floor, and its fromisoformat rejects the API's
+    5-digit fractional seconds. Every timestamp goes through _parse_ts instead."""
+
+    def test_the_apis_own_shape(self):
+        ts = ad._parse_ts("2026-09-29T19:12:56.45725+00:00")
+        assert ts is not None and (ts.hour, ts.minute, ts.second) == (19, 12, 56)
+
+    def test_an_offset_is_converted_to_utc(self):
+        assert ad._parse_ts("2026-09-29T10:00:00-08:00").hour == 18
+
+    def test_z_and_no_offset_are_utc(self):
+        assert ad._parse_ts("2026-09-29T10:00:00Z").hour == 10
+        assert ad._parse_ts("2026-09-29T10:00:00").hour == 10
+
+    def test_epoch_milliseconds(self):
+        assert ad._parse_ts(1790728312217).year == 2026
+
+    def test_garbage_is_none_not_a_crash(self):
+        assert ad._parse_ts("not a date") is None and ad._parse_ts(None) is None
+
+
+class TestDayZone:
+    def test_the_default_newsroom_counts_days_in_its_own_zone(self, monkeypatch):
+        monkeypatch.delenv("NEWS_SITE", raising=False)
+        pytest.importorskip("zoneinfo")
+        try:
+            _, name, note = ad._day_zone(None)
+        except SystemExit:
+            pytest.skip("no tz database on this machine")
+        assert name in ("America/Anchorage", "UTC")
+        assert (name == "UTC") == bool(note), "a UTC fallback must say so"
+
+    def test_another_newsroom_gets_utc_and_is_told(self, monkeypatch):
+        """The API reports no time zone. Borrowing Alaska's for another newsroom
+        would count its evening stories on the wrong day, silently."""
+        monkeypatch.setenv("NEWS_SITE", "https://another-newsroom.example")
+        _, name, note = ad._day_zone(None)
+        assert name == "UTC" and "--tz" in note
+
+    def test_an_unknown_explicit_zone_is_an_error(self):
+        with pytest.raises(SystemExit):
+            ad._day_zone("Mars/Olympus")
+
+
+def _feed_row(i, published, sort_ms=None, slug="alaska-news", status="published"):
+    pub = ad._parse_ts(published)
+    return {"id": f"a{i}", "slug": f"story-{i}", "title": f"Story {i}", "tldr": f"Summary {i}.",
+            "location": "Anchorage", "published_at": published, "status": status,
+            "_sortDate": sort_ms if sort_ms is not None else int(pub.timestamp() * 1000),
+            "communities": {"slug": slug, "name": "Alaska News"}}
+
+
+class TestDayFromTheFeed:
+    """digest --date reads the public feed. Each test pins one measured fact about
+    that feed (the comment above _read_day_from_feed lists them)."""
+
+    UTC = __import__("datetime").timezone.utc
+
+    def _run(self, monkeypatch, pages, day="2026-09-29", tz=None):
+        calls = []
+
+        def fake(method, path, params=None, **k):
+            calls.append((method, path, dict(params or {}), k.get("public")))
+            i = params["offset"] // ad.FEED_PAGE
+            return pages[i] if i < len(pages) else {"data": [], "has_more": False}
+        monkeypatch.setattr(ad, "api_request", fake)
+        import datetime as dt
+        out = ad._read_day_from_feed(dt.date.fromisoformat(day), tz or self.UTC, "alaska-news")
+        return out, calls
+
+    def test_it_is_a_public_read_of_the_feed(self, monkeypatch):
+        _, calls = self._run(monkeypatch, [{"data": [_feed_row(1, "2026-09-29T12:00:00Z")]}])
+        assert {(m, p) for m, p, *_ in calls} == {("GET", "/feed")}
+        assert all(public is True for *_, public in calls)
+
+    def test_the_day_is_counted_in_the_zone_given(self, monkeypatch):
+        """02:00 UTC on the 30th is 18:00 on the 29th in Anchorage."""
+        zi = pytest.importorskip("zoneinfo")
+        try:
+            ak = zi.ZoneInfo("America/Anchorage")
+        except Exception:
+            pytest.skip("no tz database on this machine")
+        pages = [{"data": [_feed_row(1, "2026-09-30T02:00:00Z"), _feed_row(2, "2026-09-29T07:00:00Z"),
+                           _feed_row(3, "2026-09-29T09:00:00Z")]}]
+        out, _ = self._run(monkeypatch, pages, tz=ak)
+        # 07:00 UTC on the 29th is 23:00 on the 28th in Anchorage (UTC-8), so a2 is
+        # the day before; 09:00 UTC is 01:00 on the 29th, so a3 is the day itself.
+        assert {r["id"] for r in out["data"]} == {"a1", "a3"}
+
+    def test_has_more_false_is_not_believed(self, monkeypatch):
+        """Every feed page says has_more=false while the next offset answers."""
+        p1 = {"data": [_feed_row(1, "2026-09-29T12:00:00Z")], "has_more": False, "total": 1}
+        p2 = {"data": [_feed_row(2, "2026-09-29T11:00:00Z")], "has_more": False, "total": 1}
+        out, calls = self._run(monkeypatch, [p1, p2])
+        assert len(calls) >= 2 and {r["id"] for r in out["data"]} == {"a1", "a2"}
+
+    def test_it_stops_once_a_week_past_the_day(self, monkeypatch):
+        old = "2026-09-15T00:00:00Z"
+        pages = [{"data": [_feed_row(1, "2026-09-29T12:00:00Z")]},
+                 {"data": [_feed_row(2, old)]},
+                 {"data": [_feed_row(3, "2026-09-29T08:00:00Z")]}]
+        out, calls = self._run(monkeypatch, pages)
+        assert len(calls) == 2 and out["complete"] is True
+
+    def test_a_straggler_inside_the_margin_is_still_found(self, monkeypatch):
+        """Ranked, not chronological: a story of the day may sort behind older ones."""
+        pages = [{"data": [_feed_row(1, "2026-09-25T00:00:00Z")]},
+                 {"data": [_feed_row(2, "2026-09-29T12:00:00Z")]}]
+        out, _ = self._run(monkeypatch, pages)
+        assert "a2" in {r["id"] for r in out["data"]}
+
+    def test_duplicates_and_other_newsrooms_are_dropped(self, monkeypatch):
+        """Pages overlap, and the feed ignores its community parameter."""
+        pages = [{"data": [_feed_row(1, "2026-09-29T12:00:00Z"), _feed_row(1, "2026-09-29T12:00:00Z"),
+                           _feed_row(2, "2026-09-29T11:00:00Z", slug="somewhere-else"),
+                           _feed_row(3, "2026-09-29T10:00:00Z", status="draft")]}]
+        out, _ = self._run(monkeypatch, pages)
+        assert [r["id"] for r in out["data"]] == ["a1"]
+
+    def test_the_cap_is_admitted(self, monkeypatch):
+        monkeypatch.setattr(ad, "FEED_SCAN_CAP", 2)
+        pages = [{"data": [_feed_row(i, "2026-09-29T12:00:00Z")]} for i in range(5)]
+        out, calls = self._run(monkeypatch, pages)
+        assert len(calls) == 2 and out["complete"] is False
+
+
+class TestDigestDay:
+    def test_a_day_renders_time_summary_and_link(self, monkeypatch, capsys):
+        monkeypatch.delenv("NEWS_SITE", raising=False)
+        monkeypatch.setattr(ad, "_read_day_from_feed", lambda day, tz, c: {
+            "data": [_feed_row(7, "2026-09-29T12:00:00Z")], "scanned": 50, "complete": True,
+            "reached": "2026-09-20T00:00:00+00:00"})
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
+        ad.cmd_digest(_Args(date="2026-09-29", tz="UTC"))
+        out = capsys.readouterr().out
+        assert "1 story" in out and "12:00  **Story 7**" in out and "Summary 7." in out
+        assert "https://alaskanews.com/c/alaska-news/story-7" in out
+        assert "public feed, no key: 50 stories scanned" in out and "TERMS" in out
+
+    def test_an_empty_day_says_so_and_an_incomplete_scan_admits_it(self, monkeypatch, capsys):
+        monkeypatch.setattr(ad, "_read_day_from_feed", lambda day, tz, c: {
+            "data": [], "scanned": 4000, "complete": False, "reached": None})
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
+        ad.cmd_digest(_Args(date="2026-06-15", tz="UTC"))
+        out = capsys.readouterr().out
+        assert "No stories published on 2026-06-15 in what was scanned" in out
+        assert "may be missing" in out
+
+    def test_without_a_date_digest_is_unchanged(self, monkeypatch, capsys):
+        monkeypatch.setattr(ad, "fetch_markdown", lambda url, timeout=30: "# Homepage")
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
+        ad.cmd_digest(_Args(date=None))
+        assert "# Homepage" in capsys.readouterr().out
+
+
+_SEARCH = {"data": {
+    "articles": {"total": 2, "results": [
+        {"id": "art1", "title": "Port deal approved", "slug": "port-deal", "published_at": "2026-09-01T00:00:00Z",
+         "excerpt": "The assembly approved it.", "communities": {"slug": "alaska-news"}}]},
+    "transcripts": {"total": 1, "results": [
+        {"id": "c1", "source_id": "src9", "speaker": "Mayor Smith", "source_title": "Assembly, Sept 1",
+         "content": "We will fund it."}]},
+    "speakers": {"total": 1, "results": [{"id": "sp1", "display_name": "Jane Smith", "role": "Mayor"}]},
+    "events": {"total": 0, "results": []},
+    "tags": {"total": 1, "results": [{"name": "Port of Alaska", "slug": "port-of-alaska", "category": "organization"}]},
+}}
+
+
+class TestBrief:
+    def _run(self, monkeypatch, capsys, **kw):
+        calls = []
+        monkeypatch.setattr(ad, "api_request",
+                            lambda m, p, params=None, **k: (calls.append((m, p, dict(params or {}))), _SEARCH)[1])
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
+        monkeypatch.delenv("NEWS_SITE", raising=False)
+        args = dict(topic="port of alaska", limit=5, out=None)
+        args.update(kw)
+        ad.cmd_brief(_Args(**args))
+        return calls, capsys.readouterr().out
+
+    def test_it_is_one_read_of_search(self, monkeypatch, capsys):
+        calls, _ = self._run(monkeypatch, capsys, since="2026-01-01")
+        assert calls == [("GET", "/search", {"q": "port of alaska", "community": "alaska-news",
+                                              "limit": 5, "date_from": "2026-01-01"})]
+
+    def test_no_corpus_is_requested_by_name(self, monkeypatch, capsys):
+        """Naming an editor-only corpus is a 403; leaving corpus off lets the
+        server return what the key reaches."""
+        calls, _ = self._run(monkeypatch, capsys)
+        assert "corpus" not in calls[0][2]
+
+    def test_sections_arrive_in_a_writers_order(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys)
+        order = [out.index(h) for h in ("## Prior coverage", "## The public record", "## On the record",
+                                        "## Meetings, hearings and deadlines", "## Beats and subjects",
+                                        "## Fill these in before you write")]
+        assert order == sorted(order)
+        assert "https://alaskanews.com/c/alaska-news/port-deal" in out
+        assert '"We will fund it."' in out and "[transcript src9]" in out
+
+    def test_the_four_blanks_are_there(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys)
+        for label in ("Why it matters", "Whose voice is missing", "What you will cite", "Premise check"):
+            assert f"**{label}.**" in out
+
+    def test_what_was_not_searched_is_said(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys)
+        assert "Not searched for your key:" in out and "external_documents" in out
+
+    def test_an_empty_section_says_nothing_found(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys)
+        events = out.split("## Meetings, hearings and deadlines")[1].split("##")[0]
+        assert "nothing found" in events
+
+    def test_out_writes_a_local_file_that_carries_the_terms(self, monkeypatch, capsys, tmp_path):
+        target = tmp_path / "brief.md"
+        calls, out = self._run(monkeypatch, capsys, out=str(target))
+        text = target.read_text(encoding="utf-8")
+        assert text.startswith("# Research brief: port of alaska") and "TERMS" in text
+        assert f"Written to {target}" in out and len(calls) == 1
 
 
 if __name__ == "__main__":

@@ -6,6 +6,63 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.5.0 - 2026-09-30
+
+Two features carried over from the newsroom's own internal tools, adapted to what an outside reader
+can reach.
+
+### Added
+
+- **`digest --date <today | yesterday | YYYY-MM-DD>`: one day's stories**, newest first, each with
+  its time, place, one-line summary and link. A daily briefing, and **no key**: it reads the public
+  `/feed`. `--tz <Area/City>` sets the time zone a day is counted in; the default newsroom's own zone
+  (America/Anchorage) is the default, and another newsroom gets UTC with a note saying so, since the
+  API reports no time zone. `--json` gives the stories as data.
+- **`brief "<topic>"`: a research brief before writing.** One `/search` across every corpus the key
+  reaches, arranged in a writer's order (prior coverage, meeting and hearing transcripts, people on
+  the record, events, beats), then four blanks to fill before drafting: why it matters, whose voice
+  is missing, what you will cite, and a premise check. No model call. `--out FILE` also saves it,
+  with the newsroom's terms. It says which corpora it could not search for your key.
+
+### Measured, and built around
+
+The public feed was measured on 2026-09-29 before anything was built on it, and five facts shaped
+`digest --date`: it answers without a key while `/articles` does not; it **ignores its documented
+`community` parameter**, so rows are filtered by their own community; its **paging metadata is
+wrong** (`has_more` is always false while the next offset answers), so it is paged until a stop rule
+instead; it is **ranked, not chronological** (a story can arrive up to about a week behind older
+ones, and resurface up to a year after publication), so the scan runs to a week past the day; and
+**pages overlap**, so rows are de-duplicated. Its timestamps carry 5-digit fractional seconds that
+Python 3.9's `fromisoformat` rejects, so the client parses them itself.
+
+### Changed
+
+- `/feed` is read by this client now, in one place and as a public read. It was deliberately left
+  alone on 2026-09-09 because, for a keyed reader, it duplicated `/articles`; that reasoning did not
+  cover a reader with no key.
+- Next-step hints no longer say `digest` is the only keyless mode; `topics` and `tags` have been
+  keyless since 1.3.0.
+- `SKILL.md`'s explanation of next steps and `next_steps` moved to `references/output.md`, to keep
+  the body an agent loads inside its budget.
+
+### From an outside review of the skills page
+
+- **Relevance is no longer called corroboration.** Two matching dimensions (topic and actor) make a
+  piece relevant; several pieces can repeat one source, so they do not confirm a claim. `SKILL.md`,
+  `angles`' output and its next steps now say to verify against an independent source, ideally the
+  primary record. A test pins the wording.
+- **The read-only key's guarantee is stated exactly.** It was "cannot damage the newsroom if it
+  leaks". The server rejects every write such a key attempts, so it cannot change anything; it is
+  still a credential that can read what it reaches and spend its rate limit, so a leaked one gets
+  revoked. The same fix is in the README.
+- **The `rag` cost of a read-only key comes first**, beside the advice to create one, and the `rag`
+  line in the Modes block says it will not run with one.
+- **The `angles` table matches the code.** It said `rag` ran underneath two intents; each run is one
+  `/search`, and `rag` is only ever a suggested next step. The table now has separate "runs now" and
+  "suggested next" columns, per intent.
+- Historical explanations of old bugs left `SKILL.md` for this changelog, and the account settings
+  address is a link.
+
 ## 1.4.1 - 2026-09-30
 
 Housekeeping before the repository goes public; no behaviour changes.

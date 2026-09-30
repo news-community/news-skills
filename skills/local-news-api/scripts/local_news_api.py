@@ -88,7 +88,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.4.1"
+UA = "local-news-api/1.5.0"
 
 
 def site():
@@ -117,7 +117,7 @@ def read_key():
             or os.environ.get(OLDEST_KEY_ENV) or "")
 
 
-RELATED_MODES = ("digest · browse · search · angles · article · transcript · events · people · "
+RELATED_MODES = ("digest · browse · search · angles · brief · article · transcript · events · people · "
                  "person · topics · tags · rag · clip · communities · check")
 def see_also():
     host = urllib.parse.urlparse(site()).netloc or site()
@@ -529,18 +529,26 @@ def _skill_next_steps(mode, args, has_key, state=None) -> list:
         steps = []
         if not has_key:
             steps.append((f"echo '{KEY_ENV}=cn_...' >> .env.local ; then `check`",
-                          "digest is the only keyless mode; a key unlocks search, angles, transcripts, and rag"))
+                          "digest, topics and tags need no key; a key unlocks search, brief, "
+                          "transcripts and the rest"))
+        if getattr(args, "date", None):
+            steps += [
+                ("article <slug from a story above>", "read one in full, and cite the article, not this summary"),
+                ('brief "<topic from a story above>"',
+                 "turn a story into a research brief: prior coverage, the record, who is on it"),
+                ("digest --date <the day before>", "step back a day"),
+            ]
+        else:
+            steps.append(("digest --date today", "today's stories with a one-line summary each"))
         steps += [
             ('search "<topic from a headline above>"',
-             "internal before external: confirm what Alaska News already has before you write"),
-            ('angles "<topic>" --intent track',
-             "work it as a story: fix Who+What, expand the rest (the five Ws)"),
+             "internal before external: confirm what the newsroom already has before you write"),
         ]
         return steps
     if mode == "check":
         if not has_key:
             return [(f"set {KEY_ENV}, then re-run `check`",
-                     "only `digest` works without a key; the rest report their reach once a key is set")]
+                     "digest, topics and tags work without a key; the rest report their reach once one is set")]
         # Read the probe results rather than assuming they passed. This block
         # used to congratulate the reader on reaching search immediately after
         # every request had been refused.
@@ -585,13 +593,20 @@ def _skill_next_steps(mode, args, has_key, state=None) -> list:
         return [("article <id from a quote's source>", "open the article a quote came from"),
                 ('angles "<topic>" --intent angle', "fix Why+What: who else deploys this framing"),
                 ('search "<topic>"', "widen beyond the RAG hits")]
+    if mode == "brief":
+        return [
+            ("article <url or id from Prior coverage>", "read what you will cite in full before you cite it"),
+            ("transcript <source id from the record>", "the whole meeting, not just the matching excerpt"),
+            ('person <id from On the record>', "everything a person appears in, marked where they are quoted"),
+            ("events --days 30", "what is still coming up that you could attend or file comment on"),
+        ]
     if mode == "angles":
         # Discovery is nested: one intent fixes two Ws; the next steps expand a
         # free axis or pivot the fixed pair. Placeholders (not the live seed) match
         # the house style of the other modes and keep this args-free.
         return [
             ("article <id from a hit above>",
-             "open a match, then confirm it agrees on a SECOND axis, not just the topic"),
+             "open a match: a SECOND axis agreeing makes it relevant; an independent source makes it confirmed"),
             ('rag "<seed>"',
              "expand What+Why across time (ignore When): prior coverage and precedent"),
             ('angles "<seed>" --intent track   (or: local, precedent, angle)',
@@ -740,8 +755,300 @@ def _emit(obj, args, render=None, mode=""):
 
 # --- modes ------------------------------------------------------------------
 
+# --- digest --date: one day's stories, read from the public feed ----------------
+#
+# Measured against the live feed on 2026-09-29, and each fact below is why the
+# code looks the way it does:
+#   - /feed answers without a key, and /articles does not, so a keyless daily
+#     briefing has to come from /feed.
+#   - It ignores its documented `community` parameter (any value answered the same
+#     rows), so rows are filtered here by their own `communities.slug`.
+#   - Its paging metadata is wrong: every page says has_more=false and total=count,
+#     yet the next offset answers another page. So it is paged until empty or until
+#     the stop rule below, never on has_more.
+#   - It is ranked, not chronological. By `_sortDate` the worst straggler seen in
+#     1,000 rows arrived about 7 days behind stories older than it; by published_at
+#     stories resurface up to a year late. published_at was never later than
+#     _sortDate, so a story published on a day always sorts at or after that day's
+#     start, and the scan can stop once it is FEED_STRAGGLE past it.
+#   - Pages overlap (978 unique ids in 1,000 rows), so rows are de-duplicated.
+DEFAULT_TZ = "America/Anchorage"   # the default newsroom's own zone; the API reports none
+FEED_PAGE = 100
+FEED_SCAN_CAP = 40                 # pages: 4,000 stories, about three months at today's rate
+FEED_STRAGGLE = _dt.timedelta(days=8)
+
+_TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?"
+                    r"\s*(Z|[+-]\d\d:?\d\d)?$")
+
+
+def _parse_ts(value):
+    """An API timestamp as an aware UTC datetime, or None. Written by hand because
+    Python 3.9's fromisoformat, this client's floor, rejects the 5-digit fractional
+    seconds the API emits ("19:12:56.45725+00:00"). No offset is read as UTC."""
+    if isinstance(value, (int, float)):
+        secs = value / 1000 if value > 1e11 else value
+        return _dt.datetime.fromtimestamp(secs, _dt.timezone.utc)
+    m = _TS_RE.match(str(value or "").strip())
+    if not m:
+        return None
+    y, mo, d, h, mi, s, frac, off = m.groups()
+    ts = _dt.datetime(int(y), int(mo), int(d), int(h), int(mi), int(s or 0),
+                      int((frac or "0")[:6].ljust(6, "0")), tzinfo=_dt.timezone.utc)
+    if off and off != "Z":
+        sign = 1 if off[0] == "+" else -1
+        ts -= sign * _dt.timedelta(hours=int(off[1:3]), minutes=int(off[-2:]))
+    return ts
+
+
+def _day_zone(explicit):
+    """(tzinfo, name, note) for counting days. An explicit --tz that does not
+    exist is an error; the DEFAULT zone missing from this machine's tz database
+    falls back to UTC, and the note says so. A newsroom other than the default gets
+    UTC unless told otherwise, because the API does not say where a newsroom is."""
+    name = explicit or (DEFAULT_TZ if site() == DEFAULT_SITE else None)
+    if not name:
+        return (_dt.timezone.utc, "UTC", "Days are counted in UTC: this newsroom's time zone is "
+                "not known to the client. Pass --tz <Area/City> for local days.")
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(name), name, ""
+    except Exception:
+        if explicit:
+            sys.exit(f"Unknown time zone {explicit!r}. Use an IANA name such as America/Anchorage.")
+        return (_dt.timezone.utc, "UTC", f"Days are counted in UTC: the time zone {name} is not "
+                "available on this machine (no tz database; `pip install tzdata` adds one).")
+
+
+def _parse_day(text, tz):
+    """--date as a calendar date. `today` and `yesterday` are in the day's zone."""
+    today = _dt.datetime.now(tz).date()
+    if text in ("today", "yesterday"):
+        return today - _dt.timedelta(days=text == "yesterday")
+    try:
+        return _dt.date.fromisoformat(text)
+    except ValueError:
+        sys.exit(f"--date takes YYYY-MM-DD, today or yesterday, not {text!r}.")
+
+
+def _sort_ts(row):
+    return (_parse_ts(row.get("_sortDate")) or _parse_ts(row.get("effective_arrival_at"))
+            or _parse_ts(row.get("published_at")))
+
+
+def _read_day_from_feed(day, tz, community):
+    """Every published story whose published_at falls on `day` in `tz`, from the
+    public feed. Returns the list envelope plus how far the scan reached, or the
+    first non-list response untouched so the renderer can fall back to it."""
+    start = _dt.datetime.combine(day, _dt.time(), tz).astimezone(_dt.timezone.utc)
+    end = _dt.datetime.combine(day + _dt.timedelta(days=1), _dt.time(), tz).astimezone(_dt.timezone.utc)
+    stop_before = start - FEED_STRAGGLE
+    seen, hits, scanned, reached, complete = set(), [], 0, None, False
+    for page_no in range(FEED_SCAN_CAP):
+        resp = api_request("GET", "/feed", {"limit": FEED_PAGE, "offset": page_no * FEED_PAGE,
+                                            "community": community}, public=True)
+        rows = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(rows, list):
+            return resp
+        if not rows:
+            complete = True
+            break
+        page_sorts = []
+        for r in rows:
+            if not isinstance(r, dict) or r.get("id") in seen:
+                continue
+            seen.add(r.get("id"))
+            scanned += 1
+            sort_at = _sort_ts(r)
+            if sort_at:
+                page_sorts.append(sort_at)
+            slug = (r.get("communities") or {}).get("slug")
+            if (slug and slug != community) or r.get("status") not in (None, "published"):
+                continue
+            pub = _parse_ts(r.get("published_at"))
+            if pub and start <= pub < end:
+                hits.append(r)
+        if page_sorts:
+            reached = min(page_sorts + ([reached] if reached else []))
+            if reached < stop_before:
+                complete = True
+                break
+    return {"data": hits, "scanned": scanned, "complete": complete,
+            "reached": reached.isoformat() if reached else None}
+
+
+def _day_story(r, tz, community):
+    pub = _parse_ts(r.get("published_at"))
+    slug = r.get("slug")
+    comm = (r.get("communities") or {}).get("slug") or community
+    return {"id": r.get("id"), "title": r.get("title"), "tldr": r.get("tldr") or r.get("excerpt"),
+            "location": r.get("location"), "story_type": r.get("story_type"),
+            "published_at": r.get("published_at"),
+            "local_time": pub.astimezone(tz).strftime("%H:%M") if pub else None,
+            "url": f"{site()}/c/{comm}/{slug}" if slug else None}
+
+
+def cmd_digest_day(args):
+    """One day's stories with a one-line summary each: the daily briefing. Public."""
+    tz, tz_name, tz_note = _day_zone(args.tz)
+    day = _parse_day(args.date, tz)
+    resp = _guided(lambda: _read_day_from_feed(day, tz, args.community))
+    rows = resp.get("data") if isinstance(resp, dict) else None
+    if not isinstance(rows, list):
+        _emit(resp, args, None, mode="digest")
+        return
+    stories = sorted((_day_story(r, tz, args.community) for r in rows),
+                     key=lambda s: s["published_at"] or "", reverse=True)
+    reached = (_parse_ts(resp.get("reached")) or None)
+    note = ("Read from the public feed, no key: " + f"{resp.get('scanned', 0)} stories scanned"
+            + (f", back to {reached.astimezone(tz).date().isoformat()}" if reached else "") + ".")
+    if not resp.get("complete"):
+        note += (" The scan cap stopped it before it was a week past this date, so stories may be "
+                 "missing: a date this old is better answered by `search` with --since/--until.")
+    if args.json:
+        print(json.dumps({"date": day.isoformat(), "time_zone": tz_name, "stories": stories,
+                          "scanned": resp.get("scanned"), "complete": resp.get("complete"),
+                          "note": " ".join(x for x in (tz_note, note) if x)}, ensure_ascii=False))
+        return
+    name = urllib.parse.urlsplit(site()).netloc or site()
+    for r in rows:
+        name = (r.get("communities") or {}).get("name") or name
+        break
+    out = [f"# {name}, {day.strftime('%A')} {day.isoformat()}: {len(stories)} "
+           f"{'story' if len(stories) == 1 else 'stories'}  (times in {tz_name})"]
+    if not stories:
+        out.append(f"\nNo stories published on {day.isoformat()}"
+                   + ("." if resp.get("complete") else " in what was scanned."))
+    for s in stories:
+        where = f"  ({s['location']})" if s.get("location") else ""
+        out.append(f"\n- {s.get('local_time') or '--:--'}  **{str(s.get('title') or '(untitled)').strip()}**{where}")
+        if s.get("tldr"):
+            out.append(f"  {str(s['tldr']).strip()[:320]}")
+        if s.get("url"):
+            out.append(f"  {s['url']}")
+    out.append("\n" + " ".join(x for x in (tz_note, note) if x))
+    print("\n".join(out))
+    _print_hateoas("digest", args, None)
+    print(f"\n---\n{terms_note()}")
+
+
+# --- brief: a research brief before writing -------------------------------------
+
+# Sections in the order a writer needs them. Each corpus is one /search corpus
+# any valid key reaches; the editor-only ones (external_documents, social_post)
+# are never requested by name, so the server leaves them out rather than refusing.
+BRIEF_SECTIONS = (
+    ("articles", "Prior coverage", "Cite the article itself, by its URL."),
+    ("transcripts", "The public record: meeting and hearing transcripts",
+     "Quote verbatim, and name the meeting; open it with `transcript <source id>`."),
+    ("speakers", "On the record: people", "Check names and spellings against these before you use one."),
+    ("events", "Meetings, hearings and deadlines", "What is coming up, or just happened, on this story."),
+    ("tags", "Beats and subjects", "A slug here works with `browse --tag` for the rest of the coverage."),
+)
+
+BRIEF_BLANKS = (
+    ("Why it matters", "One sentence: this matters because [the larger local story, pattern or "
+     "decision]. If you cannot write it from what is above, the piece will read as a press release."),
+    ("Whose voice is missing", "Name one person or group this does not hear from, and where you "
+     "looked for them (the transcripts and people above first)."),
+    ("What you will cite", "The articles and transcripts above you will actually cite, by URL or id. "
+     "Cite a specific piece, never \"previously reported\"."),
+    ("Premise check", "Is the premise of the story true on the record? Check dates (published is not "
+     "when it happened), names, and the primary document, not a summary of it."),
+)
+
+
+def _brief_item(corpus, it, community):
+    """One brief entry: a headline line plus up to two detail lines."""
+    lines = []
+    if corpus == "articles":
+        when = (it.get("published_at") or "")[:10]
+        lines.append(f"- **{str(it.get('title') or '(untitled)').strip()}**" + (f" ({when})" if when else ""))
+        comm = (it.get("communities") or {}).get("slug") or community
+        if it.get("slug"):
+            lines.append(f"  {site()}/c/{comm}/{it['slug']}")
+        excerpt = it.get("excerpt") or it.get("description") or it.get("tldr")
+        if excerpt:
+            lines.append(f"  {str(excerpt).strip()[:200]}")
+    elif corpus == "transcripts":
+        lines.append(f"- **{it.get('speaker') or 'unidentified speaker'}** in "
+                     f"*{it.get('source_title') or 'a meeting'}*  [transcript {it.get('source_id') or '?'}]")
+        if it.get("content"):
+            lines.append(f"  \"{str(it['content']).strip()[:260]}\"")
+    elif corpus == "speakers":
+        name = it.get("display_name") or it.get("name") or it.get("slug") or "?"
+        tail = ", ".join(x for x in (it.get("role"), it.get("organization")) if x)
+        lines.append(f"- **{name}**" + (f": {tail}" if tail else "") + (f"  [{it.get('id')}]" if it.get("id") else ""))
+    elif corpus == "events":
+        when = (it.get("event_date") or "")[:10]
+        tail = ", ".join(x for x in (it.get("event_location"), it.get("event_type")) if x)
+        lines.append(f"- **{it.get('event_title') or '(untitled event)'}**" + (f" ({when})" if when else "")
+                     + (f": {tail}" if tail else ""))
+    elif corpus == "tags":
+        lines.append(f"- **{it.get('name') or it.get('slug') or '?'}** [{it.get('category') or '?'}]"
+                     + (f"  `{it.get('slug')}`" if it.get("slug") else ""))
+    else:
+        lines.append(_result_line(corpus, it))
+    return lines
+
+
+def _render_brief(resp, args):
+    data = resp.get("data") if isinstance(resp, dict) else None
+    if not isinstance(data, dict):
+        return json.dumps(resp, indent=2, ensure_ascii=False)
+    window = " ".join(x for x in (f"since {args.since}" if args.since else "",
+                                  f"until {args.until}" if args.until else "") if x)
+    out = [f"# Research brief: {args.topic}",
+           f"> {urllib.parse.urlsplit(site()).netloc or site()}, community `{args.community}`"
+           + (f", {window}" if window else "")
+           + f". Generated {_dt.datetime.now(_dt.timezone.utc).date().isoformat()} (UTC)."]
+    for corpus, heading, how in BRIEF_SECTIONS:
+        block = data.get(corpus) or {}
+        results = block.get("results") or []
+        out += ["", f"## {heading} ({block.get('total', len(results))})", f"_{how}_"]
+        if not results:
+            out.append("- nothing found")
+        for it in results[:args.limit]:
+            out += _brief_item(corpus, it, args.community)
+    others = [c for c in data if c not in {s[0] for s in BRIEF_SECTIONS}]
+    for corpus in others:
+        results = (data.get(corpus) or {}).get("results") or []
+        if results:
+            out += ["", f"## Also found: {corpus} ({len(results)})"]
+            out += [_result_line(corpus, it) for it in results[:args.limit]]
+    missing = [c for c in CORPORA if c not in data]
+    if missing:
+        out += ["", f"_Not searched for your key: {', '.join(missing)} (external documents and social "
+                    "posts need an editor role)._"]
+    out += ["", "## Fill these in before you write"]
+    for i, (label, prompt) in enumerate(BRIEF_BLANKS, 1):
+        out += ["", f"{i}. **{label}.** {prompt}", "   > "]
+    return "\n".join(out)
+
+
+def cmd_brief(args):
+    """A research brief before writing: one /search across every corpus the key
+    reaches, arranged for a writer, then four blanks the writer fills. Mechanical
+    assembly, no model call; the judgment is the reader's. Read-only against the
+    API; --out writes the brief to a LOCAL file and nothing else."""
+    params = {"q": args.topic, "community": args.community, "limit": args.limit}
+    params.update(_date_params(args))
+    resp = _guided(lambda: api_request("GET", "/search", params))
+    if args.json:
+        _emit(resp, args, None, mode="brief")
+        return
+    text = _render_brief(resp, args)
+    if args.out:
+        Path(args.out).write_text(f"{text}\n\n---\n{terms_note()}\n", encoding="utf-8")
+        text += f"\n\n(Written to {args.out}.)"
+    _emit(resp, args, lambda r: text, mode="brief")
+
+
 def cmd_digest(args):
-    """Recent-stories markdown homepage. Public, no key. The on-ramp."""
+    """Recent-stories markdown homepage. Public, no key. The on-ramp. With --date,
+    one day's stories with a summary each instead (see cmd_digest_day)."""
+    if getattr(args, "date", None):
+        cmd_digest_day(args)
+        return
     md = fetch_markdown(site() + "/")
     if args.json:
         print(json.dumps({"markdown": md}, ensure_ascii=False))
@@ -873,8 +1180,9 @@ def cmd_angles(args):
             "Held on the fixed axes; the hits below vary the rest. One level only: nest via Next steps.",
         ]
         out += _render_corpora(r.get("data") if isinstance(r, dict) else None, args.limit)
-        out.append("\nCorroboration: trust a match only when a SECOND axis agrees. A hit that shares "
-                   "only the topic is one-axis (an anecdote), not corroboration.")
+        out.append("\nRelevance, not corroboration: a hit is relevant when a SECOND axis agrees, not "
+                   "just the topic. That still does not confirm a claim, since several pieces can repeat "
+                   "one source: verify against an independent source, ideally the primary record.")
         return "\n".join(out)
 
     _emit(resp, args, render, mode="angles")
@@ -1588,7 +1896,12 @@ def main():
         epilog=f"Every mode ends with Next steps (HATEOAS). Related modes: {RELATED_MODES}.")
     sub = ap.add_subparsers(dest="mode", required=True)
 
-    sub.add_parser("digest", parents=[common], help="Recent stories (public, no key)")
+    p = sub.add_parser("digest", parents=[common],
+                       help="Recent stories; --date for one day's stories with a summary each (public, no key)")
+    p.add_argument("--date", metavar="YYYY-MM-DD",
+                   help="one day's stories, each with its summary: a date, today or yesterday")
+    p.add_argument("--tz", metavar="AREA/CITY",
+                   help="the time zone a day is counted in (default: the default newsroom's, else UTC)")
     sub.add_parser("check", parents=[common], help="What can my key reach?")
     sub.add_parser("communities", parents=[common],
                    help="List community slugs valid for --community")
@@ -1607,6 +1920,13 @@ def main():
                    help="which two Ws to fix (default: similar = What+Why)")
     _add_date_range(p)
     p.add_argument("--limit", type=int, default=5)
+
+    p = sub.add_parser("brief", parents=[common],
+                       help="Research brief before writing: prior coverage, the record, people, events, then blanks")
+    p.add_argument("topic", help="what the piece is about, in the words you would search")
+    _add_date_range(p)
+    p.add_argument("--limit", type=int, default=5, help="entries per section (default 5)")
+    p.add_argument("--out", metavar="FILE", help="also write the brief to this local Markdown file")
 
     p = sub.add_parser("people", parents=[common], help="Who-axis directory: named speakers")
     p.add_argument("query", nargs="?", default="", help="substring match on the name")
@@ -1659,7 +1979,7 @@ def main():
 
     args = ap.parse_args()
     {
-        "digest": cmd_digest, "check": cmd_check, "search": cmd_search, "angles": cmd_angles,
+        "digest": cmd_digest, "check": cmd_check, "search": cmd_search, "angles": cmd_angles, "brief": cmd_brief,
         "article": cmd_article, "transcript": cmd_transcript, "events": cmd_events,
         "rag": cmd_rag, "clip": cmd_clip, "communities": cmd_communities,
         "people": cmd_people, "person": cmd_person, "topics": cmd_topics,

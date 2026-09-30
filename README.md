@@ -19,7 +19,7 @@ nobody reads.
 
 ## What this does about it
 
-One read-only client over a newsroom's public API, with fifteen modes covering what is
+One read-only client over a newsroom's public API, with sixteen modes covering what is
 published, what is coming up, who said it, and what was reported before. Every output ends
 with where to go next, and carries the newsroom's **own** machine-readable usage terms,
 fetched at run time rather than compiled in, so the tool cannot print one newsroom's terms
@@ -30,7 +30,7 @@ write back to the platform.
 
 | Skill | What it does |
 |-------|--------------|
-| [`skills/local-news-api`](skills/local-news-api/SKILL.md) | **Local News API**: a read-only client for a newsroom's public API (for example `https://alaskanews.com/api/v1`). 15 modes: `check` (what your key reaches), `digest` and `browse` (what's published), `search` and `angles` (five-Ws discovery), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clip`, and `communities`. |
+| [`skills/local-news-api`](skills/local-news-api/SKILL.md) | **Local News API**: a read-only client for a newsroom's public API (for example `https://alaskanews.com/api/v1`). 16 modes: `check` (what your key reaches), `digest` and `browse` (what's published; `digest --date` for one day's stories, a summary each), `search` and `angles` (five-Ws discovery), `brief` (a research brief before writing), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clip`, and `communities`. |
 
 ## Install
 
@@ -85,8 +85,9 @@ export COMMUNITIES_NEWS_API_KEY=cn_...
 ## Quickstart
 
 ```bash
-# 1. Recent stories, no key needed:
+# 1. Recent stories, or one day's with a summary each, no key needed:
 python3 skills/local-news-api/scripts/local_news_api.py digest
+python3 skills/local-news-api/scripts/local_news_api.py digest --date today
 
 # 2. Get a key at alaskanews.com/profile/settings -- TICK "READ-ONLY" -- then:
 export COMMUNITIES_NEWS_API_KEY=cn_...
@@ -97,6 +98,7 @@ python3 skills/local-news-api/scripts/local_news_api.py check
 # 4. Search, then work a story across the five Ws:
 python3 skills/local-news-api/scripts/local_news_api.py search "port of alaska settlement" --since 2026-01-01
 python3 skills/local-news-api/scripts/local_news_api.py angles "port of alaska" --intent track
+python3 skills/local-news-api/scripts/local_news_api.py brief "port of alaska" --out brief.md
 
 # 5. What can you still show up to, or still file comment on?
 python3 skills/local-news-api/scripts/local_news_api.py events --days 14
@@ -106,10 +108,11 @@ python3 skills/local-news-api/scripts/local_news_api.py people "dunleavy"
 python3 skills/local-news-api/scripts/local_news_api.py browse --tag transportation
 ```
 
-**Tick "Read-only" when you create the key.** Nothing here writes, but a read-only key is
-enforced by the server rather than promised by code you would have to read: it reaches
-everything in this toolkit and cannot damage the newsroom if it leaks. (The one exception is
-`rag`, whose read-only query is an HTTP `POST`.) `check` reports which kind you hold.
+**Tick "Read-only" when you create the key**, and know its one cost: `rag` will not work, because
+its read-only query is an HTTP `POST`. The guarantee is the server's, not this code's: it rejects
+every write a read-only key attempts, so the key cannot change anything. It is still a credential;
+if it leaks, whoever has it can read what it reaches and spend its rate limit, so revoke it. `check`
+reports which kind you hold.
 
 Python 3, standard library only. No dependencies to install for the tool itself. Verified on
 3.11, 3.13 and 3.14; CI also runs 3.9, the intended floor. See
