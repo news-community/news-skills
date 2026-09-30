@@ -6,6 +6,16 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.4.1 - 2026-09-30
+
+Housekeeping before the repository goes public; no behaviour changes.
+
+- A code comment in `local_news_api.py` pointed at a planning document that lives outside this
+  repository. It now points at the newsroom's public API spec instead
+  (`<newsroom>/api/v1/openapi.json`; for Alaska News, `alaskanews.com/api/v1/openapi.json`).
+- `.env.example` gives a generic `localhost:<port>` for the local-platform override rather than a
+  specific development port.
+
 ## 1.4.0 - 2026-09-30
 
 ### Changed

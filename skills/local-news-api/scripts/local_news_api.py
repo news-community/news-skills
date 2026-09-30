@@ -88,7 +88,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.4.0"
+UA = "local-news-api/1.4.1"
 
 
 def site():
@@ -1406,19 +1406,17 @@ def keyed_probes(community):
 # KEY_BLIND_ENDPOINTS was deleted on 2026-09-09.
 #
 # It listed, by hand, the endpoints no API key reaches. It was correct when it
-# was written and nothing in either repo compared it to the platform's router,
-# so it would have kept answering confidently after the server changed. That is
-# the whole failure mode this client was compensating for.
+# was written and nothing compared it to the platform's router, so it would have
+# kept answering confidently after the server changed. That is the whole failure
+# mode this client was compensating for.
 #
 # The platform now answers the question itself: GET /api/v1/me returns a
-# `reachability` block derived from its own route tree at build time and gated
-# by class 6 of its audit script, which fails if the generated list and the live
-# router disagree. It distinguishes `session_auth_only` (no key of any role
-# reaches it, so there is nothing to request) from `requires_role` (a membership
-# you could be granted), which is the distinction this list existed to preserve
-# and the one a bare 401 destroys.
-#
-# See platform docs/plans/2026-09-09-api-surface-agents-actually-consume.md.
+# `reachability` block derived from its own route tree, which the platform checks
+# against its live router. It distinguishes `session_auth_only` (no key of any
+# role reaches it, so there is nothing to request) from `requires_role` (a
+# membership you could be granted), which is the distinction this list existed
+# to preserve and the one a bare 401 destroys. The public spec for /me is at
+# <newsroom>/api/v1/openapi.json (for Alaska News, alaskanews.com/api/v1/openapi.json).
 _STATUS = {401: "needs a key", 403: "forbidden (role/scope)", 429: "rate-limited",
            0: "unreachable", TIMED_OUT: "timed out (slow, not blocked)",
            NON_JSON: "non-JSON reply"}

@@ -18,7 +18,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.4.0"
+  version: "1.4.1"
   author: Communities News LLC
   homepage: https://communities.news
   repository: news-community/news-skills
