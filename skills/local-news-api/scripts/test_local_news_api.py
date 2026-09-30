@@ -963,6 +963,13 @@ class TestSkillMdMeetsTheSpec:
         assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name), \
             f"{name!r} is not lowercase-hyphen-only, or starts/ends with a hyphen"
 
+    def test_name_matches_its_folder(self):
+        """The spec says `name` should match the parent directory, and clients that
+        install by folder rely on it. The skill has been renamed twice (alaska-desk,
+        news-desk, local-news-api); this is what keeps the next rename honest."""
+        assert _frontmatter()["name"] == SKILL_MD.parent.name, \
+            f"name {_frontmatter()['name']!r} but folder {SKILL_MD.parent.name!r}"
+
     def test_description_is_within_the_spec_limit(self):
         d = _frontmatter()["description"]
         assert d.strip(), "description must be non-empty"

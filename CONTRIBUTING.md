@@ -1,5 +1,8 @@
 # Contributing
 
+Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md). AI coding
+agents: start with [AGENTS.md](AGENTS.md).
+
 Thanks for looking. This repo shares tools that external creators can point at a Communities News
 newsroom API, alaskanews.com by default. Contributions are welcome, with one hard rule and one
 habit.

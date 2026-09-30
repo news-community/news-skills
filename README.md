@@ -1,5 +1,9 @@
 # News Skills
 
+[![tests](https://github.com/news-community/news-skills/actions/workflows/test.yml/badge.svg)](https://github.com/news-community/news-skills/actions/workflows/test.yml)
+[![License: MIT-0](https://img.shields.io/badge/license-MIT--0-blue.svg)](LICENSE)
+[![ClawHub: local-news-api](https://img.shields.io/badge/ClawHub-local--news--api-orange.svg)](https://clawhub.ai/alaskanews/skills/local-news-api)
+
 Open, read-only tools for building on community newsroom reporting, from Communities News.
 The example newsroom throughout is **Alaska News** at [alaskanews.com](https://alaskanews.com),
 whose public API is `https://alaskanews.com/api/v1`. It is the first newsroom on the platform and
@@ -178,6 +182,20 @@ train models on it) and **`ai-input=yes`** (you may quote it with attribution an
 Every command prints whatever the newsroom actually declares, and says so plainly if it cannot
 read them. If you publish anything sourced here, name the newsroom and link the source. Those
 content terms are separate from this repository's code license below.
+
+## Contributing
+
+Issues and pull requests are welcome, from people and from agents alike.
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to run the tests, what a new mode needs, and the rules the
+  suite enforces.
+- [AGENTS.md](AGENTS.md): the same ground, condensed for AI coding agents working in this repo.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how we expect people to treat each other here.
+- [SECURITY.md](SECURITY.md): what the client does with your key, and how to report a
+  vulnerability privately rather than in a public issue.
+
+If your key cannot reach something you expected, an issue with the output of `check` is genuinely
+useful: it prints statuses, never your key.
 
 ## Changelog
 
