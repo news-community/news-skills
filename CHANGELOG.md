@@ -1,10 +1,28 @@
 # Changelog
 
 The skill declares a `version` under `metadata` in
-[`SKILL.md`](skills/news-desk/SKILL.md). This file is what that number refers to.
+[`SKILL.md`](skills/local-news-api/SKILL.md). This file is what that number refers to.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
+
+## 1.4.0 - 2026-09-30
+
+### Changed
+
+- **Renamed to `local-news-api` ("Local News API")**, from `news-desk`. It is a read-only client
+  for a newsroom's public API, and "desk" described neither that nor anything it does. The skill
+  folder is `skills/local-news-api/` and the client is `scripts/local_news_api.py`. On ClawHub the
+  old slug `news-desk` stays as a redirect, so an existing install keeps resolving.
+- **The key is `COMMUNITIES_NEWS_API_KEY`**, named for what it is: a Communities News platform key,
+  whose prefix `cn_` already said so. `NEWS_DESK_API_KEY` and `ALASKA_DESK_API_KEY` are still read,
+  in that order after the new name, so no existing setup breaks. Deliberately not `NEWS_API_KEY`,
+  which newsapi.org users commonly have set: reading it would send a stranger's key to the newsroom.
+- **`SKILL.md` introduces the platform and uses Alaska News as its worked example**, naming the site
+  (`https://alaskanews.com`), the API (`https://alaskanews.com/api/v1`) and the spec
+  (`https://alaskanews.com/api/v1/openapi.json`), where it used to read as an Alaska-only tool.
+- The User-Agent is `local-news-api/1.4.0`, and a test now derives it from the frontmatter `name`
+  as well as the version.
 
 ## 1.3.1 - 2026-09-30
 

@@ -1,7 +1,9 @@
 # News Skills
 
-Open, read-only tools for building on community newsroom reporting. Alaska News is the
-newsroom they point at today, and not the only one they can.
+Open, read-only tools for building on community newsroom reporting, from Communities News.
+The example newsroom throughout is **Alaska News** at [alaskanews.com](https://alaskanews.com),
+whose public API is `https://alaskanews.com/api/v1`. It is the first newsroom on the platform and
+the default, not the only one the tools can reach.
 
 ## The problem
 
@@ -24,14 +26,31 @@ write back to the platform.
 
 | Skill | What it does |
 |-------|--------------|
-| [`skills/news-desk`](skills/news-desk/SKILL.md) | A read-only research client. 15 modes: `check` (what your key reaches), `digest` and `browse` (what's published), `search` and `angles` (five-Ws discovery), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clip`, and `communities`. |
+| [`skills/local-news-api`](skills/local-news-api/SKILL.md) | **Local News API**: a read-only client for a newsroom's public API (for example `https://alaskanews.com/api/v1`). 15 modes: `check` (what your key reaches), `digest` and `browse` (what's published), `search` and `angles` (five-Ws discovery), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clip`, and `communities`. |
 
 ## Install
 
 This is an [Agent Skills](https://agentskills.io) skill, so installing it means putting the
 skill directory where your agent looks for skills.
 
-**Claude Code**, all skills in this repo:
+**From ClawHub**, where it is published as
+[`local-news-api`](https://clawhub.ai/alaskanews/skills/local-news-api) by `alaskanews`. For OpenClaw, or any
+agent that reads a `skills/` folder in your working directory:
+
+```bash
+clawhub install local-news-api
+```
+
+**Claude Code, from ClawHub**, into your personal skills folder:
+
+```bash
+npx clawhub install local-news-api --workdir ~/.claude
+```
+
+Use the plain slug. `@alaskanews/local-news-api` also resolves, but installs into a nested
+`skills/@alaskanews/local-news-api` that Claude Code does not look in.
+
+**Claude Code**, from this repository, all skills in it:
 
 ```bash
 git clone https://github.com/news-community/news-skills.git ~/.claude/skills/news-skills
@@ -41,13 +60,13 @@ git clone https://github.com/news-community/news-skills.git ~/.claude/skills/new
 
 ```bash
 git clone https://github.com/news-community/news-skills.git ~/src/news-skills
-ln -s ~/src/news-skills/skills/news-desk ~/.claude/skills/news-desk
+ln -s ~/src/news-skills/skills/local-news-api ~/.claude/skills/local-news-api
 ```
 
-**Other agents**: point yours at `skills/news-desk/`, or skip the agent entirely and run the
+**Other agents**: point yours at `skills/local-news-api/`, or skip the agent entirely and run the
 CLI directly as below. It is a plain Python program and does not need an agent to be useful.
 
-If you already have a skill named `news-desk`, install this one under a different directory
+If you already have a skill named `local-news-api`, install this one under a different directory
 name. The frontmatter `name` is what most clients key on, so two skills sharing it is the
 thing to avoid, not two directories.
 
@@ -56,31 +75,31 @@ Then set a key:
 ```bash
 cp .env.example .env.local     # then edit it
 # or, from anywhere:
-export NEWS_DESK_API_KEY=cn_...
+export COMMUNITIES_NEWS_API_KEY=cn_...
 ```
 
 ## Quickstart
 
 ```bash
 # 1. Recent stories, no key needed:
-python3 skills/news-desk/scripts/news_desk.py digest
+python3 skills/local-news-api/scripts/local_news_api.py digest
 
 # 2. Get a key at alaskanews.com/profile/settings -- TICK "READ-ONLY" -- then:
-export NEWS_DESK_API_KEY=cn_...
+export COMMUNITIES_NEWS_API_KEY=cn_...
 
 # 3. See what your key reaches:
-python3 skills/news-desk/scripts/news_desk.py check
+python3 skills/local-news-api/scripts/local_news_api.py check
 
 # 4. Search, then work a story across the five Ws:
-python3 skills/news-desk/scripts/news_desk.py search "port of alaska settlement" --since 2026-01-01
-python3 skills/news-desk/scripts/news_desk.py angles "port of alaska" --intent track
+python3 skills/local-news-api/scripts/local_news_api.py search "port of alaska settlement" --since 2026-01-01
+python3 skills/local-news-api/scripts/local_news_api.py angles "port of alaska" --intent track
 
 # 5. What can you still show up to, or still file comment on?
-python3 skills/news-desk/scripts/news_desk.py events --days 14
+python3 skills/local-news-api/scripts/local_news_api.py events --days 14
 
 # 6. Work an actor, or a beat:
-python3 skills/news-desk/scripts/news_desk.py people "dunleavy"
-python3 skills/news-desk/scripts/news_desk.py browse --tag transportation
+python3 skills/local-news-api/scripts/local_news_api.py people "dunleavy"
+python3 skills/local-news-api/scripts/local_news_api.py browse --tag transportation
 ```
 
 **Tick "Read-only" when you create the key.** Nothing here writes, but a read-only key is
@@ -90,16 +109,16 @@ everything in this toolkit and cannot damage the newsroom if it leaks. (The one 
 
 Python 3, standard library only. No dependencies to install for the tool itself. Verified on
 3.11, 3.13 and 3.14; CI also runs 3.9, the intended floor. See
-[`skills/news-desk/SKILL.md`](skills/news-desk/SKILL.md) for the full guide.
+[`skills/local-news-api/SKILL.md`](skills/local-news-api/SKILL.md) for the full guide.
 
 ## Built on the Agent Skills standard
 
-`skills/news-desk/` follows the [Agent Skills specification](https://agentskills.io/specification):
+`skills/local-news-api/` follows the [Agent Skills specification](https://agentskills.io/specification):
 a directory containing a `SKILL.md` of YAML frontmatter plus Markdown instructions, with an
 optional `scripts/` beside it.
 
 ```
-skills/news-desk/
+skills/local-news-api/
   SKILL.md           # required: frontmatter + instructions
   scripts/           # optional: the client and its tests
   references/        # optional: loaded on demand, not on every run
@@ -119,7 +138,7 @@ conformance quietly.
 The spec also recommends keeping `SKILL.md` under 500 lines and 5,000 tokens, since that body
 loads into an agent's context on every run. A test enforces that budget, and provenance that a
 reader may want but an agent never needs lives in
-[`references/`](skills/news-desk/references/) instead.
+[`references/`](skills/local-news-api/references/) instead.
 
 ## Standalone
 
@@ -132,8 +151,9 @@ maintained and not a requirement for using it. If you cloned this and it works, 
 
 ## Other newsrooms
 
-alaskanews.com is the **default**, not a limit. The platform is multi-community by design, so
-`NEWS_SITE` and `NEWS_COMMUNITY` point the same tool at another newsroom on it, and the usage
+alaskanews.com (API `https://alaskanews.com/api/v1`) is the **default**, not a limit. Every
+newsroom on the platform serves the same API at its own domain, so `NEWS_SITE` and
+`NEWS_COMMUNITY` point the same tool at another newsroom on it, and the usage
 terms are read from whichever newsroom you point at rather than baked in. Today Alaska is the
 only one live, so this is a door rather than a road.
 
@@ -141,7 +161,7 @@ only one live, so this is a door rather than a road.
 
 ```bash
 pip install pytest
-python3 -m pytest skills/news-desk/scripts/test_news_desk.py -q
+python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
 ```
 
 Offline: no key and no network required. CI runs them on every push, across Python 3.9-3.13.

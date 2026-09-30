@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-news_desk.py, a READ-ONLY research client for a Communities News newsroom API.
+local_news_api.py, a READ-ONLY client for a Communities News newsroom's public API.
+Example: Alaska News at alaskanews.com, whose API is https://alaskanews.com/api/v1.
 
 For external creators (community journalists, bloggers, civic writers) to pull
 published articles, meeting transcripts, public events, and prior-coverage RAG
@@ -30,8 +31,8 @@ where to go next, so no external map is needed.
 
 ## Auth: your own key, and only what it reaches
 
-Each user supplies their OWN `cn_` key (env `NEWS_DESK_API_KEY`, or the legacy
-`ALASKA_DESK_API_KEY`, or a `.env.local`
+Each user supplies their OWN `cn_` key (env `COMMUNITIES_NEWS_API_KEY`, or the legacy
+`NEWS_DESK_API_KEY` / `ALASKA_DESK_API_KEY`, or a `.env.local`
 next to this script). `digest`, `topics` and `tags` need none; `search`/`angles`/`article`/`transcript`
 /`events`/`rag`/`communities` need a valid key. `check` reports what YOUR key can
 reach by ASKING the server: `GET /api/v1/me` returns a `reachability` block
@@ -52,9 +53,9 @@ SKILL.md's "Working the story" section.
 
 Auth + HTTP + env plumbing is inlined below; stdlib only, no dependencies.
 
-    NEWS_DESK_API_KEY=cn_...  python3 news_desk.py search "port of alaska settlement"
-    python3 news_desk.py digest            # no key needed
-    python3 news_desk.py check             # what can my key reach?
+    COMMUNITIES_NEWS_API_KEY=cn_...  python3 local_news_api.py search "port of alaska settlement"
+    python3 local_news_api.py digest       # no key needed
+    python3 local_news_api.py check        # what can my key reach?
 """
 from __future__ import annotations
 
@@ -80,14 +81,14 @@ from pathlib import Path
 #
 #     NEWS_SITE=https://<host>          the newsroom (API base is derived from it)
 #     NEWS_COMMUNITY=<slug>             default for --community
-#     NEWS_DESK_API_KEY=cn_...          your key
+#     COMMUNITIES_NEWS_API_KEY=cn_...   your key (cn_ is the Communities News prefix)
 #     PLATFORM_API_BASE=...             override only if the API is not at /api/v1
 
 DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "news-desk/1.3.1"
+UA = "local-news-api/1.4.0"
 
 
 def site():
@@ -99,15 +100,21 @@ def default_community():
     return os.environ.get("NEWS_COMMUNITY", DEFAULT_COMMUNITY)
 
 
-# The key's env var was ALASKA_DESK_API_KEY. Renaming it without honouring the old
-# name would break every existing setup silently, reported as "no key set", so the
-# old name still works and is the only reason this is two names rather than one.
-KEY_ENV = "NEWS_DESK_API_KEY"
-LEGACY_KEY_ENV = "ALASKA_DESK_API_KEY"
+# The key is a Communities News platform key (cn_ is its prefix), so that is its
+# name. It was ALASKA_DESK_API_KEY until 1.1 and NEWS_DESK_API_KEY until 1.4, when
+# the skill was named for a desk. Renaming without honouring the old names would
+# break every existing setup silently, reported as "no key set", so both still work,
+# in that order of precedence, and are the only reason this is three names.
+# Deliberately not NEWS_API_KEY: newsapi.org users commonly have that set, and this
+# client would then send a stranger's key to the newsroom.
+KEY_ENV = "COMMUNITIES_NEWS_API_KEY"
+LEGACY_KEY_ENV = "NEWS_DESK_API_KEY"
+OLDEST_KEY_ENV = "ALASKA_DESK_API_KEY"
 
 
 def read_key():
-    return os.environ.get(KEY_ENV) or os.environ.get(LEGACY_KEY_ENV) or ""
+    return (os.environ.get(KEY_ENV) or os.environ.get(LEGACY_KEY_ENV)
+            or os.environ.get(OLDEST_KEY_ENV) or "")
 
 
 RELATED_MODES = ("digest · browse · search · angles · article · transcript · events · people · "
@@ -240,7 +247,7 @@ class ApiError(Exception):
 # supply the key and the community, never a destination. Destinations come from your
 # real environment or from a .env next to this script, both of which you control.
 # Flagged by ClawHub's security scan of 1.3.0 on 2026-09-29, and correctly.
-CWD_ENV_ALLOWED = frozenset({KEY_ENV, LEGACY_KEY_ENV, "NEWS_COMMUNITY"})
+CWD_ENV_ALLOWED = frozenset({KEY_ENV, LEGACY_KEY_ENV, OLDEST_KEY_ENV, "NEWS_COMMUNITY"})
 _IGNORED_NOTICES = set()  # _load_env runs more than once per command; say it once
 
 
@@ -283,7 +290,7 @@ def _load_env():
                         _IGNORED_NOTICES.add((p, k))
                         print(f"Ignored {k} from {p}: a project's .env can supply your key but "
                               "not choose where it is sent. Export it, or put it in a .env "
-                              "next to news_desk.py.", file=sys.stderr)
+                              "next to local_news_api.py.", file=sys.stderr)
                     continue
                 os.environ.setdefault(k, v)
 
@@ -681,7 +688,7 @@ def _guided(fn):
             sys.exit(
                 "Not authorized (401). This mode needs your alaskanews API key (starts with 'cn_').\n"
                 f"  Recovery: echo '{KEY_ENV}=cn_...' >> .env.local\n"
-                "  Then: python3 news_desk.py check\n"
+                "  Then: python3 local_news_api.py check\n"
                 "  Get a key at alaskanews.com/profile/settings."
             )
         if e.code == 403:

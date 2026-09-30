@@ -6,7 +6,7 @@ habit.
 
 ## The hard rule: this stays read-only
 
-`skills/news-desk` is a **consumer** client. It must never `PATCH`, `PUT` or `DELETE`, and its
+`skills/local-news-api` is a **consumer** client. It must never `PATCH`, `PUT` or `DELETE`, and its
 only `POST` is the read-only `/rag/query`. Two things enforce that, and a change that trips either
 will not be merged:
 
@@ -41,7 +41,7 @@ So if you add or change a mode, or write anything about what an endpoint returns
 
 ```bash
 pip install pytest
-python3 -m pytest skills/news-desk/scripts/test_news_desk.py -q
+python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
 ```
 
 Offline: no key, no network. CI runs them on Python 3.9, 3.11 and 3.13.
@@ -72,7 +72,7 @@ this repo is mostly prose about a program and the temptation recurs.
 
 ## SKILL.md is a spec document, and the tests treat it as one
 
-`skills/news-desk/SKILL.md` follows the [Agent Skills
+`skills/local-news-api/SKILL.md` follows the [Agent Skills
 specification](https://agentskills.io/specification), and `TestSkillMdMeetsTheSpec` asserts its
 constraints: `name` lowercase-and-hyphens under 64 characters, `description` non-empty and under
 1024, `compatibility` under 500, `metadata` a flat map of strings to strings, and a declared
@@ -84,11 +84,11 @@ skill that reads a variable it does not declare. Registries read that key only a
 is the single exception to the flat map, and `TestRegistryMetadata` holds it in both directions:
 **if you make the client read a new environment variable, declare it there**, or the suite fails.
 The listing a registry shows (display name and short summary) lives in
-`skills/news-desk/agents/openai.yaml`, not in `SKILL.md`: the `description` field is what an agent
+`skills/local-news-api/agents/openai.yaml`, not in `SKILL.md`: the `description` field is what an agent
 reads to decide when to use the skill, and it stays written for that job.
 
 **What a registry installs is the skill folder minus `.clawhubignore`**, which leaves out the test
-file. So nothing in `SKILL.md` may link outside `skills/news-desk/` or tell an agent to run the
+file. So nothing in `SKILL.md` may link outside `skills/local-news-api/` or tell an agent to run the
 tests; `TestRegistryBundle` checks both.
 
 Two things follow for anyone editing it:
@@ -120,4 +120,4 @@ Two things follow for anyone editing it:
 
 If you would rather just tell us something is wrong, that is genuinely useful, especially
 **"my key cannot reach X"**. Reach varies by role and we cannot see your key. Open an issue with the
-output of `news_desk.py check`, which is safe to paste: it prints statuses, never your key.
+output of `local_news_api.py check`, which is safe to paste: it prints statuses, never your key.

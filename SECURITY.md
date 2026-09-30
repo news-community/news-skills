@@ -16,7 +16,7 @@ newsroom, `alaskanews.com/profile/settings`). You do not need us and you should 
 rejected by the server on every write method before a handler runs, so a leaked one cannot be used
 to damage the newsroom.
 
-Do not paste a key into an issue. `news_desk.py check` is safe to paste; it prints reachability
+Do not paste a key into an issue. `local_news_api.py check` is safe to paste; it prints reachability
 statuses and never the key.
 
 ## Three behaviours worth knowing before you run it
@@ -36,7 +36,8 @@ read public endpoints and send no `Authorization` header even when a key is set.
 **It reads `.env` and `.env.local` from the current directory**, not only from beside the script, so
 that the key is found whether you run from the project root or the script's folder. Values are
 loaded without overriding anything already in your environment, and the only secret it ever
-transmits is `NEWS_DESK_API_KEY` (or the legacy `ALASKA_DESK_API_KEY`).
+transmits is `COMMUNITIES_NEWS_API_KEY` (or the older `NEWS_DESK_API_KEY` or
+`ALASKA_DESK_API_KEY`).
 
 **A current-directory `.env` may set the key and `NEWS_COMMUNITY`, and nothing else.** That
 directory is whatever project the skill happens to run in, so its `.env` is not yours: until 1.3.1
@@ -44,7 +45,7 @@ it could set `NEWS_SITE` or `PLATFORM_API_BASE` and so choose where an exported 
 put the key of anyone running an agent inside an untrusted repository one file away from a
 stranger's server. Reproduced against 1.3.0 with a local collector, which received the bearer
 token; 1.3.1 ignores both settings from that file, says so on stderr, and sends nothing there.
-Destinations now come only from your real environment or from a `.env` next to `news_desk.py`.
+Destinations now come only from your real environment or from a `.env` next to `local_news_api.py`.
 Found by ClawHub's security scan of 1.3.0.
 
 **It fetches each newsroom's usage terms over the network.** Before printing the terms line, the

@@ -1,12 +1,13 @@
 ---
-name: news-desk
+name: local-news-api
 description: >-
   Use when someone asks what a local newsroom has published, is about to cover, or has
   reported before: what happened at a public meeting, when the next hearing or comment
   deadline falls, who said something on the record, or what prior coverage exists to cite.
   Reads published articles, meeting transcripts with speakers and timestamps, upcoming civic
   events, a people directory, beats and traceable prior-coverage citations from a Communities
-  News newsroom API, alaskanews.com by default. Read-only: it never writes back. Reach for it
+  News newsroom's public API, for example Alaska News at alaskanews.com (the default).
+  Read-only: it never writes back. Reach for it
   even when the request never says "API" or names the newsroom, as in "has anyone reported on
   this", "when does the assembly next meet", "what did the mayor say about the port", "find
   me what was written before", or "is there a public comment deadline coming up".
@@ -14,33 +15,38 @@ license: MIT-0
 compatibility: >-
   Python 3.9+, standard library only, no third-party packages. Needs network access to a
   Communities News newsroom (alaskanews.com unless NEWS_SITE says otherwise) and, for most
-  modes, that newsroom's own cn_ API key in NEWS_DESK_API_KEY.
+  modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.3.1"
+  version: "1.4.0"
   author: Communities News LLC
   homepage: https://communities.news
   repository: news-community/news-skills
-  openclaw: {"primaryEnv": "NEWS_DESK_API_KEY", "requires": {"bins": ["python3"]},
+  openclaw: {"primaryEnv": "COMMUNITIES_NEWS_API_KEY", "requires": {"bins": ["python3"]},
     "homepage": "https://communities.news",
     "envVars": [
-      {"name": "NEWS_DESK_API_KEY", "required": false, "description": "The newsroom's cn_ API key. digest, topics and tags run without it."},
-      {"name": "ALASKA_DESK_API_KEY", "required": false, "description": "Legacy name for NEWS_DESK_API_KEY, still honoured."},
-      {"name": "NEWS_SITE", "required": false, "description": "Newsroom origin; defaults to https://alaskanews.com."},
-      {"name": "NEWS_COMMUNITY", "required": false, "description": "Community slug; defaults to alaska-news."},
-      {"name": "PLATFORM_API_BASE", "required": false, "description": "Overrides the API base derived from NEWS_SITE."}]}
+      {"name": "COMMUNITIES_NEWS_API_KEY", "required": false, "description": "Your cn_ key. digest, topics and tags run without it."},
+      {"name": "NEWS_DESK_API_KEY", "required": false, "description": "Older name for the key, still read."},
+      {"name": "ALASKA_DESK_API_KEY", "required": false, "description": "Oldest name for the key, still read."},
+      {"name": "NEWS_SITE", "required": false, "description": "Newsroom origin; default https://alaskanews.com."},
+      {"name": "NEWS_COMMUNITY", "required": false, "description": "Community slug; default alaska-news."},
+      {"name": "PLATFORM_API_BASE", "required": false, "description": "API base; default NEWS_SITE + /api/v1."}]}
 ---
 
-# news-desk
+# Local News API
 
-> **A read-only research client for the alaskanews.com public API**, for external Alaska
-> creators, community journalists, bloggers, and civic writers, to pull published articles,
-> meeting transcripts, public events, and prior coverage into **their own** work, under the
-> site's stated terms.
+> **A read-only client for a local newsroom's public API** on the Communities News platform. It
+> pulls published articles, the sources behind them (meeting transcripts, people quoted, video
+> clips) and upcoming meetings and deadlines into **your own** work, under the newsroom's terms.
+
+**The example throughout is Alaska News**, the first newsroom on the platform and the default:
+site `https://alaskanews.com`, API `https://alaskanews.com/api/v1`, spec
+`https://alaskanews.com/api/v1/openapi.json`. Every newsroom on the platform serves the same API
+at its own domain.
 
 **This skill only consumes.** It never submits, edits, or writes back to the platform.
 Submitting content into the newsroom is a separate, editor-authenticated workflow that is not
-part of this tool. news-desk is for people building on Alaska News reporting from the outside.
+part of this tool.
 
 ---
 
@@ -48,12 +54,12 @@ part of this tool. news-desk is for people building on Alaska News reporting fro
 
 | | |
 |---|---|
-| **Audience** | external Alaska creators, one per key |
+| **Audience** | community journalists, bloggers, civic writers; one key each |
 | **Direction** | READ ONLY. No `PATCH` / `PUT` / `DELETE`; its only `POST` is the read-only RAG query. A test enforces this. |
-| **Auth** | **your own** `cn_` API key (`NEWS_DESK_API_KEY`), ideally created **read-only**. `digest`, `topics` and `tags` need none. |
+| **Auth** | **your own** `cn_` API key (`COMMUNITIES_NEWS_API_KEY`), ideally created **read-only**. `digest`, `topics` and `tags` need none. |
 | **Output** | rendered markdown by default (paste into your draft), `--json` for raw. Every response carries the site's usage terms. |
-| **Newsroom** | alaskanews.com by default, and that is a DEFAULT not a limit: `NEWS_SITE` + `NEWS_COMMUNITY` point it elsewhere. |
-| **Runs on** | [`scripts/news_desk.py`](scripts/news_desk.py), Python 3, standard library only, no dependencies. |
+| **Newsroom** | alaskanews.com (`/api/v1`) by default, a DEFAULT not a limit: `NEWS_SITE` + `NEWS_COMMUNITY` point it elsewhere. |
+| **Runs on** | [`scripts/local_news_api.py`](scripts/local_news_api.py), Python 3, standard library only, no dependencies. |
 
 **It is not** a content generator. It produces *source material* that you turn into your own
 article, script, or post.
@@ -70,21 +76,20 @@ falling back to `llms.txt`. alaskanews.com currently declares:
 - **`search=yes`** it may surface in AI-powered search.
 - **`ai-input=yes`** you may quote it **with attribution and a backlink**.
 
-That used to be a constant in the source. It is fetched now for two reasons. A newsroom can change
-its stance and a constant would keep reciting the old one. And pointed at a **different** newsroom, a
-constant would have printed Alaska's terms over somebody else's reporting, which for a tool whose
-whole ethic is "the attribution is the consideration" is the worst thing in the file. **If the terms
-cannot be read, the output says so and invents nothing.**
+Fetched, not compiled in, so a newsroom's change of stance shows up at once and a different
+newsroom's reporting never carries Alaska's terms. **If the terms cannot be read, the output says so
+and invents nothing.**
 
 Every mode prints that reminder under its output. It is not decoration: the person running this
 is republishing someone else's reporting, and the attribution + backlink is the consideration
-for using it. If you generate content from an article, name Alaska News and link the source.
+for using it. If you generate content from an article, name the newsroom (Alaska News, for alaskanews.com) and
+link the source.
 
 ---
 
 ## Auth: your own key, and only what it reaches
 
-Create a key at `alaskanews.com/profile/settings`. **Tick "Read-only" when you create it.**
+Create a key in your account on the newsroom's site; for Alaska News, `alaskanews.com/profile/settings`. **Tick "Read-only" when you create it.**
 
 That checkbox is the single most useful thing on this page for you. This client never writes, but
 that is a promise made by code you would have to read; a read-only key is enforced by the server,
@@ -97,14 +102,14 @@ without that mode.
 Then either export the key (works from anywhere):
 
 ```bash
-export NEWS_DESK_API_KEY=cn_...
+export COMMUNITIES_NEWS_API_KEY=cn_...
 ```
 
 or drop it in a gitignored `.env.local` next to the script (or in your project root, which may
 hold the key but never `NEWS_SITE` or `PLATFORM_API_BASE`):
 
 ```bash
-echo 'NEWS_DESK_API_KEY=cn_...' >> scripts/.env.local
+echo 'COMMUNITIES_NEWS_API_KEY=cn_...' >> scripts/.env.local
 ```
 
 Access is tiered on the platform side, and your key may not reach everything.
@@ -130,12 +135,10 @@ they refuse *every* `cn_` key, including an admin's. `GET /clips` (browse) and
 `GET /transcripts/search` are the two you are most likely to want; `GET /transcript/<id>/speakers`
 is a third, which is why you can read every word of a meeting and not learn who said it.
 
-**You no longer have to take that list from this file.** As of 2026-09-09 the platform answers it:
-`GET /api/v1/me` returns a `reachability` block derived from its own router, and `check` renders it.
-It separates `session_auth_only` (nothing to request) from `requires_role` (a membership you could
-be granted), and those endpoints now return **403** with `error: session_auth_only` and a remedy,
-rather than a bare 401 indistinguishable from a bad key. This client used to carry that list by
-hand; it does not any more, which is the point.
+**You need not take that list from this file.** `GET /api/v1/me` returns a `reachability` block
+derived from the platform's own router, and `check` renders it: `session_auth_only` (nothing to
+request) apart from `requires_role` (a membership you could be granted). Those endpoints return
+**403** with `error: session_auth_only` and a remedy, not a bare 401 that reads like a bad key.
 
 Use `search --corpus transcripts` instead of `transcripts/search`, and get clip ids from `search` or
 an article.
@@ -150,7 +153,7 @@ directly on top of that. It reports whether your key is **read-only**, your role
 endpoints no key reaches and the ones a membership would unlock. It takes about five seconds:
 
 ```bash
-python3 scripts/news_desk.py check
+python3 scripts/local_news_api.py check
 ```
 
 ---
@@ -158,21 +161,21 @@ python3 scripts/news_desk.py check
 ## Modes
 
 ```bash
-python3 scripts/news_desk.py check                               # what does MY key reach? (run first)
-python3 scripts/news_desk.py digest                              # recent stories (no key)
-python3 scripts/news_desk.py browse --sort new                   # what has been PUBLISHED (no query)
-python3 scripts/news_desk.py search "port of alaska settlement"  # --corpus, --since, --until
-python3 scripts/news_desk.py angles "port of alaska" --intent track  # discovery: fix 2 Ws, expand the rest
-python3 scripts/news_desk.py article <id | slug | url>           # full article
-python3 scripts/news_desk.py transcript <source-id>              # meeting transcript
-python3 scripts/news_desk.py events                              # what is coming UP (next 30 days)
-python3 scripts/news_desk.py rag "public comment deadlines"      # answer + traceable citations
-python3 scripts/news_desk.py clip <clip-id>                      # resolve a known clip id to its MP4 URL
-python3 scripts/news_desk.py communities                         # slugs valid for --community
-python3 scripts/news_desk.py people "dunleavy"                   # the Who axis: named speakers
-python3 scripts/news_desk.py person <person-id>                  # one actor + the coverage they appear in
-python3 scripts/news_desk.py topics                              # the beats, ranked by coverage
-python3 scripts/news_desk.py tags "port" --category organization # the subject vocabulary
+python3 scripts/local_news_api.py check                               # what does MY key reach? (run first)
+python3 scripts/local_news_api.py digest                              # recent stories (no key)
+python3 scripts/local_news_api.py browse --sort new                   # what has been PUBLISHED (no query)
+python3 scripts/local_news_api.py search "port of alaska settlement"  # --corpus, --since, --until
+python3 scripts/local_news_api.py angles "port of alaska" --intent track  # discovery: fix 2 Ws, expand the rest
+python3 scripts/local_news_api.py article <id | slug | url>           # full article
+python3 scripts/local_news_api.py transcript <source-id>              # meeting transcript
+python3 scripts/local_news_api.py events                              # what is coming UP (next 30 days)
+python3 scripts/local_news_api.py rag "public comment deadlines"      # answer + traceable citations
+python3 scripts/local_news_api.py clip <clip-id>                      # resolve a known clip id to its MP4 URL
+python3 scripts/local_news_api.py communities                         # slugs valid for --community
+python3 scripts/local_news_api.py people "dunleavy"                   # the Who axis: named speakers
+python3 scripts/local_news_api.py person <person-id>                  # one actor + the coverage they appear in
+python3 scripts/local_news_api.py topics                              # the beats, ranked by coverage
+python3 scripts/local_news_api.py tags "port" --category organization # the subject vocabulary
 ```
 
 **`topics` is the beats; `tags` is the whole vocabulary.** `topics` lists the topic-category tags
@@ -187,14 +190,13 @@ been published", which is the question you ask before you know what X is. `--sor
 
 ## Pointing it at another newsroom
 
-The platform behind alaskanews.com is multi-community by design: it maps a host to a community, and
-this client already took `--community` and a base-URL override. What kept it Alaska-only was four
-hard-coded constants, not its structure. They are settings now:
+Every newsroom on the platform serves the same API at its own domain, so another newsroom is
+configuration, not a fork:
 
 ```bash
-export NEWS_SITE=https://<host>        # the newsroom; the API base is derived from it
-export NEWS_COMMUNITY=<slug>           # default for --community
-export NEWS_DESK_API_KEY=cn_...        # your key (the old ALASKA_DESK_API_KEY still works)
+export NEWS_SITE=https://<host>          # the newsroom; its API is <host>/api/v1
+export NEWS_COMMUNITY=<slug>             # default for --community
+export COMMUNITIES_NEWS_API_KEY=cn_...   # (NEWS_DESK_API_KEY, ALASKA_DESK_API_KEY still work)
 ```
 
 **alaskanews.com remains the default**, and today it is the only newsroom live on this platform, so
@@ -279,7 +281,7 @@ a single-keyword match is not yet a citation.
 
 ## Method: internal before external
 
-Before you reach for a general web search, ask whether Alaska News has already covered this. Run
+Before you reach for a general web search, ask whether the newsroom (Alaska News, by default) has already covered this. Run
 `search` first. If the answer is in the corpus, you save an external lookup and you can cite specific
 prior reporting; if it isn't, you now know it's a genuine gap. The reorder is the value.
 
@@ -307,7 +309,7 @@ phrase with no matching published story behind it.
   back-off, not a permission problem.
 - **`--json` is the stable machine surface.** Renderers fall back to raw JSON if a payload shape ever
   changes, and `--json` always gives you the untouched payload.
-- **This is not a submission tool.** If you want your work published *on* Alaska News, that is a
+- **This is not a submission tool.** If you want your work published *on* the newsroom, that is a
   newsroom workflow, not this.
 
 ### Not covered here, deliberately

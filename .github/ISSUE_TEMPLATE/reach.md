@@ -8,7 +8,7 @@ labels: reach
 Reach varies by API-key role and we cannot see your key, so the output of `check` is the single most
 useful thing you can paste. It prints statuses only, never your key.
 
-**Output of `python3 skills/news-desk/scripts/news_desk.py check`:**
+**Output of `python3 skills/local-news-api/scripts/local_news_api.py check`:**
 
 ```
 paste here

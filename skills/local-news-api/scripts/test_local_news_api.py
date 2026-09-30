@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Offline tests for news_desk.py.
+Offline tests for local_news_api.py.
 
 The live API needs a per-user cn_ key, so the network path is unverified here (as
 with any live-network path). Everything that does NOT touch the network is tested:
 arg parsing, URL/param construction, the license reminder, and that keyed modes
 fail with guidance rather than a traceback.
 
-    python3 -m pytest test_news_desk.py -q
+    python3 -m pytest test_local_news_api.py -q
 """
 import json
 import re
@@ -18,9 +18,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import news_desk as ad  # noqa: E402
+import local_news_api as ad  # noqa: E402
 
-SCRIPT = str(Path(__file__).resolve().parent / "news_desk.py")
+SCRIPT = str(Path(__file__).resolve().parent / "local_news_api.py")
 
 
 def run(*args, env=None):
@@ -32,6 +32,7 @@ def run(*args, env=None):
     # as no-key. A test wanting a specific key overrides via env=.
     e["ALASKA_DESK_API_KEY"] = ""
     e["NEWS_DESK_API_KEY"] = ""
+    e["COMMUNITIES_NEWS_API_KEY"] = ""
     # Terms are fetched from the configured site; keep tests on the default and
     # off any operator override that would change what they assert.
     e.pop("NEWS_SITE", None)
@@ -87,7 +88,7 @@ class TestGracefulAuth:
         assert r.returncode != 0
         blob = r.stdout + r.stderr
         assert "Traceback" not in blob
-        assert "NEWS_DESK_API_KEY" in blob
+        assert "COMMUNITIES_NEWS_API_KEY" in blob
         assert "cn_" in blob
 
     def test_check_without_key_is_quiet_and_clean(self):
@@ -95,7 +96,7 @@ class TestGracefulAuth:
         r = run("check")
         assert r.returncode == 0
         assert r.stdout.count("no key set") == 1
-        assert "Error: ALASKA_DESK_API_KEY not set" not in r.stdout
+        assert f"Error: {ad.KEY_ENV} not set" not in r.stdout
         assert "digest (public)" in r.stdout
 
     def test_wrong_key_prefix_is_named_not_disguised_as_needs_a_key(self):
@@ -226,7 +227,7 @@ class TestHateoasEmitted:
         """New/incomplete state -> onboarding action first (guide's state table)."""
         no_key = ad._skill_next_steps("digest", _Args(), has_key=False)
         with_key = ad._skill_next_steps("digest", _Args(), has_key=True)
-        assert "NEWS_DESK_API_KEY" in no_key[0][0], "no-key digest must lead with getting a key"
+        assert ad.KEY_ENV in no_key[0][0], "no-key digest must lead with getting a key"
         assert no_key != with_key, "next steps must adapt to whether a key is set"
 
     def test_footer_has_related_and_see_also(self, capsys):
@@ -434,17 +435,18 @@ class TestKeyBlindEndpointsAreNamedAsSuch:
         whole point: the list is now derived from the router that serves the
         endpoints and cannot go stale. Deriving it costs a credential.
 
-        `run()` blanks ALASKA_DESK_API_KEY on purpose to isolate from .env.local,
+        `run()` blanks every key variable on purpose to isolate from .env.local,
         so this test was structurally unable to pass after that change and failed
         for a week's worth of runs that nobody made. Pass the key explicitly and
         skip when the environment has none, rather than asserting a keyless
         behaviour the client deliberately no longer has.
         """
         import os
-        key = os.environ.get("ALASKA_DESK_API_KEY", "")
+        key = (os.environ.get(ad.KEY_ENV) or os.environ.get(ad.LEGACY_KEY_ENV)
+               or os.environ.get(ad.OLDEST_KEY_ENV) or "")
         if not key:
-            pytest.skip("needs ALASKA_DESK_API_KEY: the list is served, not recited")
-        r = run("check", env={"ALASKA_DESK_API_KEY": key})
+            pytest.skip(f"needs {ad.KEY_ENV}: the list is served, not recited")
+        r = run("check", env={ad.KEY_ENV: key})
         if "reachability: unavailable" in r.stdout:
             pytest.skip("platform predates GET /api/v1/me reachability")
         assert "Not reachable by ANY api key" in r.stdout
@@ -770,17 +772,27 @@ class TestNewsroomAgnostic:
         monkeypatch.setenv("PLATFORM_API_BASE", "http://127.0.0.1:9/v2")
         assert ad.api_base() == "http://127.0.0.1:9/v2"
 
-    def test_the_old_key_env_still_works(self, monkeypatch):
-        """Renaming it without honouring the old name would break every existing
-        setup silently, reported as 'no key set'."""
+    def test_the_old_key_envs_still_work(self, monkeypatch):
+        """Renaming it without honouring the old names would break every existing
+        setup silently, reported as 'no key set'. Two renames so far."""
+        monkeypatch.delenv("COMMUNITIES_NEWS_API_KEY", raising=False)
         monkeypatch.delenv("NEWS_DESK_API_KEY", raising=False)
-        monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_legacy")
+        monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_oldest")
+        assert ad.read_key() == "cn_oldest"
+        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_legacy")
         assert ad.read_key() == "cn_legacy"
 
-    def test_the_new_key_env_wins_when_both_are_set(self, monkeypatch):
-        monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_old")
-        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_new")
+    def test_the_new_key_env_wins_when_all_are_set(self, monkeypatch):
+        monkeypatch.setenv("ALASKA_DESK_API_KEY", "cn_oldest")
+        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_legacy")
+        monkeypatch.setenv("COMMUNITIES_NEWS_API_KEY", "cn_new")
         assert ad.read_key() == "cn_new"
+
+    def test_the_key_is_not_named_news_api_key(self):
+        """newsapi.org users commonly have NEWS_API_KEY set. Reading it would send
+        a stranger's key to the newsroom."""
+        assert "NEWS_API_KEY" not in {ad.KEY_ENV, ad.LEGACY_KEY_ENV, ad.OLDEST_KEY_ENV}
+        assert '"NEWS_API_KEY"' not in Path(SCRIPT).read_text()
 
     def test_no_market_is_compiled_into_a_request_path(self, monkeypatch):
         """The probes hard-coded `alaska-news`, so `check --community X` reported
@@ -1020,7 +1032,7 @@ class TestSkillMdMatchesTheCode:
         m = self.MODES_RE.search(SKILL_MD.read_text())
         assert m, "SKILL.md has no '## Modes' block with a bash fence"
         return {line.split()[2] for line in m.group(1).splitlines()
-                if line.startswith("python3 scripts/news_desk.py ") and len(line.split()) > 2}
+                if line.startswith("python3 scripts/local_news_api.py ") and len(line.split()) > 2}
 
     def _registered_modes(self):
         src = Path(SCRIPT).read_text()
@@ -1111,7 +1123,7 @@ class TestCredentialNeverCrossesOrigin:
                     opener.open = open_
             return opener
         monkeypatch.setattr(ad.urllib.request, "build_opener", _builder)
-        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_" + "0" * 40)
+        monkeypatch.setenv("COMMUNITIES_NEWS_API_KEY", "cn_" + "0" * 40)
         monkeypatch.setenv("PLATFORM_API_BASE", "https://newsroom.test/api/v1")
 
     def test_a_cross_origin_redirect_is_refused(self, monkeypatch):
@@ -1255,7 +1267,7 @@ class TestCheckReportsWhatHappened:
         assert set(payload) >= {"newsroom", "surfaces", "key", "notes"}
 
     def test_a_key_rejected_everywhere_is_a_key_problem_not_a_role_one(self):
-        r = run("check", env={"NEWS_DESK_API_KEY": "cn_" + "0" * 40})
+        r = run("check", env={"COMMUNITIES_NEWS_API_KEY": "cn_" + "0" * 40})
         if "unreachable" in r.stdout:
             pytest.skip("network unavailable")
         assert "no access (role)" not in r.stdout
@@ -1291,7 +1303,7 @@ class TestWorkspaceEnvCannotRedirectTheKey:
         monkeypatch.setattr(ad, "SCRIPT_DIR", skill)
         monkeypatch.setattr(ad, "_IGNORED_NOTICES", set())
         monkeypatch.chdir(project)
-        for k in self.DESTINATIONS + (ad.KEY_ENV, ad.LEGACY_KEY_ENV, "NEWS_COMMUNITY"):
+        for k in self.DESTINATIONS + (ad.KEY_ENV, ad.LEGACY_KEY_ENV, ad.OLDEST_KEY_ENV, "NEWS_COMMUNITY"):
             monkeypatch.delenv(k, raising=False)
         self.skill, self.project = skill, project
 
@@ -1378,7 +1390,7 @@ SKILL_DIR = SKILL_MD.parent
 
 
 def _env_vars_the_code_reads():
-    """Every environment variable news_desk.py reads by name. A literal is taken
+    """Every environment variable local_news_api.py reads by name. A literal is taken
     as written; an identifier is resolved through the module, so KEY_ENV counts
     as the variable it names. Anything this cannot resolve fails the test rather
     than being skipped, because an unseen read is the case the check exists for."""
@@ -1423,7 +1435,8 @@ class TestRegistryMetadata:
 
     def test_user_agent_carries_the_skill_version(self):
         """The UA said news-desk/1.1 while the skill shipped 1.2.0."""
-        assert ad.UA == f"news-desk/{_frontmatter()['metadata']['version']}"
+        fm = _frontmatter()
+        assert ad.UA == f"{fm['name']}/{fm['metadata']['version']}"
 
     def test_no_template_variables_in_skill_md(self):
         """`{{API_KEY}}` and `${TOKEN}` in examples are reported to trigger
@@ -1487,8 +1500,8 @@ class TestRegistryBundle:
     def test_tests_stay_out_of_the_bundle(self):
         """The tests read README.md and LICENSE from the repo root, so an installed
         copy would fail; and SKILL.md must then not send an agent to run them."""
-        assert "scripts/test_news_desk.py" in self._ignored()
-        assert "test_news_desk" not in SKILL_MD.read_text()
+        assert "scripts/test_local_news_api.py" in self._ignored()
+        assert "test_local_news_api" not in SKILL_MD.read_text()
 
     def test_key_files_stay_out_of_the_bundle(self):
         assert {".env", ".env.local"} <= self._ignored()
@@ -1566,11 +1579,11 @@ class TestTopicsReadTheLiveVocabulary:
 
 class TestPublicReadsCarryNoKey:
     def test_a_public_request_sends_no_credential_even_with_a_key_set(self, monkeypatch):
-        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_" + "0" * 40)
+        monkeypatch.setenv("COMMUNITIES_NEWS_API_KEY", "cn_" + "0" * 40)
         assert ad._auth_header(public=True) == {}
 
     def test_a_keyed_request_still_sends_it(self, monkeypatch):
-        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_" + "0" * 40)
+        monkeypatch.setenv("COMMUNITIES_NEWS_API_KEY", "cn_" + "0" * 40)
         assert ad._auth_header(public=False) == {"Authorization": "Bearer cn_" + "0" * 40}
 
     def test_tags_is_a_public_read(self, monkeypatch):
