@@ -166,5 +166,8 @@ in the skill's frontmatter refers to.
 
 ## License
 
-The code in this repository is released under the [MIT License](LICENSE). This covers the
-tool, not the reporting it retrieves (see Terms above).
+The code in this repository is released under the [MIT No Attribution License](LICENSE)
+(MIT-0): use, modify and redistribute it, commercially or not, with no attribution required. This
+covers the tool, not the reporting it retrieves (see Terms above), and it is why the skill can be
+listed on registries such as ClawHub, which publish every skill under MIT-0. The newsroom's
+content still carries its own terms, attribution included.

@@ -32,7 +32,7 @@ where to go next, so no external map is needed.
 
 Each user supplies their OWN `cn_` key (env `NEWS_DESK_API_KEY`, or the legacy
 `ALASKA_DESK_API_KEY`, or a `.env.local`
-next to this script). `digest` needs none; `search`/`angles`/`article`/`transcript`
+next to this script). `digest`, `topics` and `tags` need none; `search`/`angles`/`article`/`transcript`
 /`events`/`rag`/`communities` need a valid key. `check` reports what YOUR key can
 reach by ASKING the server: `GET /api/v1/me` returns a `reachability` block
 derived from the platform's own router, so this client no longer carries a
@@ -85,7 +85,9 @@ from pathlib import Path
 
 DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
-UA = "news-desk/1.1"
+# Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
+# skill shipped 1.2.0, which is the drift that test exists to stop.
+UA = "news-desk/1.3.0"
 
 
 def site():
@@ -308,13 +310,26 @@ class _SameOriginOnly(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def api_request(method, path, params=None, body=None, timeout=60):
+def _auth_header(public):
+    """The Authorization header a request should carry, or none.
+
+    A public endpoint gets NO credential, even when a key is set. It buys nothing
+    there, and a key sent where it is not needed is a key sent to one more place
+    than necessary; a wrong-prefix key would also turn a public read into a 401.
+    Only endpoints verified to answer without a key are marked public: /tags was,
+    on 2026-09-29, and the platform's OpenAPI spec lists it with no security."""
+    if public:
+        return {}
+    return {"Authorization": f"Bearer {get_api_key()}"}
+
+
+def api_request(method, path, params=None, body=None, timeout=60, public=False):
     base = api_base()
     url = f"{base.rstrip('/')}/{path.lstrip('/')}"
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     headers = {
-        "Authorization": f"Bearer {get_api_key()}",
+        **_auth_header(public),
         "Accept": "application/json",
         "User-Agent": UA,
     }
@@ -568,12 +583,13 @@ def _skill_next_steps(mode, args, has_key, state=None) -> list:
                 ("browse --tag <a tag from their coverage>",
                  "widen from the person to the subject they keep appearing in")]
     if mode == "topics":
-        return [("tags --category topic", "narrow from the beat to the specific subjects inside it"),
-                ("browse --tag <slug>", "read what has actually been published on one"),
+        return [("browse --tag <slug from above>", "read what has actually been published on one beat"),
+                ('tags "<word>" --category organization',
+                 "or find the agencies and bodies that coverage is filed under"),
                 ('search "<topic name>"', "or go straight to a query inside the beat")]
     if mode == "tags":
         return [("browse --tag <slug from above>", "that tag's coverage, newest first"),
-                ("topics", "or step up to the broad beat this subject sits in"),
+                ("topics", "or step back to the beats, ranked by how much each holds"),
                 ('angles "<tag name>" --intent local', "fix Where+What around it")]
     if mode == "browse":
         return [("article <id from a row above>", "open one in full"),
@@ -1155,37 +1171,91 @@ def cmd_person(args):
     print(f"\n---\n{terms_note()}")
 
 
+# The tag categories /tags can FILTER on. Verified against the live API 2026-09-29:
+# organization 230, location 199, topic 104. A fourth category, election (67 tags),
+# exists on the rows but the server does not filter by it: `category=election`
+# answered all 600 tags, exactly like a misspelling. Offering it would print the
+# whole vocabulary under a heading saying "category: election", so it stays out
+# until the server honours it.
+TAG_CATEGORIES = ("organization", "topic", "location")
+
+# Topic tags are read whole so they can be ranked; the category held 104 on
+# 2026-09-29. The cap bounds a runaway vocabulary rather than a real one.
+TOPIC_PAGE = 100
+TOPIC_SCAN_CAP = 1000
+
+
+def _read_topic_tags():
+    """Every topic-category tag, in pages. Returns the combined list envelope, or
+    the first non-list response untouched so the renderer can fall back to it."""
+    rows, off, total = [], 0, None
+    while off < TOPIC_SCAN_CAP:
+        page = api_request("GET", "/tags", {"category": "topic", "limit": TOPIC_PAGE,
+                                            "offset": off}, public=True)
+        data = page.get("data") if isinstance(page, dict) else None
+        if not isinstance(data, list):
+            return page
+        rows += data
+        off += len(data)
+        total = page.get("total", total)
+        if not page.get("has_more") or not data:
+            return {"data": rows, "total": total if total is not None else len(rows),
+                    "complete": True}
+    return {"data": rows, "total": total if total is not None else len(rows), "complete": False}
+
+
 def cmd_topics(args):
-    """The ~15 broad desks (Health, Education, Government), with how much has
-    been published under each. Distinct from `tags`: a topic is the BEAT, a tag
-    is the subject inside it. Both exist server-side and they are not the same
-    vocabulary, which is why this client exposes both rather than picking one."""
-    resp = _guided(lambda: api_request("GET", "/topics", {"limit": args.limit, "offset": args.offset}))
+    """The beats, ranked by how much has been published under each.
+
+    This read GET /topics until 2026-09-29. That is the retired topics taxonomy:
+    the platform's own OpenAPI spec marks it deprecated ("Use GET /api/v1/tags
+    instead"), topics were replaced by tags in April 2026, and on 2026-09-09 every
+    one of its 15 rows reported 0 articles. The topic-category TAGS carry real
+    counts, answer without a key, and are exactly what `browse --tag` takes, so
+    every beat listed here is one you can open.
+
+    The server lists tags alphabetically and takes no sort, so ranking by coverage
+    means reading the whole category first; --limit and --offset then page the
+    RANKED list, not the server's alphabet. Counts are per tag and do not roll up
+    (on 2026-09-29 "Politics & Government" held 28 articles directly while
+    "Government" beneath it held 556), so each row names its parent rather than
+    this client summing a hierarchy it does not own."""
+    resp = _guided(_read_topic_tags)
 
     def render(r):
         rows = r.get("data") if isinstance(r, dict) else None
         if not isinstance(rows, list):
             return json.dumps(r, indent=2, ensure_ascii=False)
-        # The endpoint returns article_count / source_count / total_views, and on
-        # 2026-09-09 every one of the 15 topics reported 0 for all three. Printing
-        # "0 articles" against a beat that HAS coverage is the same failure as an
-        # empty result set: it reads as "nothing published here". So the counts
-        # are shown only where the platform actually populates them, and their
-        # absence is stated once rather than rendered fifteen times as a zero.
-        any_counts = any(t.get("article_count") for t in rows if isinstance(t, dict))
-        out = [f"# topics ({len(rows)})"]
-        for t in rows:
+        rows = [t for t in rows if isinstance(t, dict)]
+        names = {t.get("slug"): t.get("name") for t in rows}
+        # Printing "0 articles" against a beat that HAS coverage reads as "nothing
+        # published here". The retired /topics did exactly that for every row, so
+        # if a vocabulary ever arrives with no counts at all, say so once rather
+        # than rendering a column of zeros.
+        any_counts = any(t.get("article_count") for t in rows)
+        ranked = sorted(rows, key=lambda t: (-(t.get("article_count") or 0), str(t.get("name", ""))))
+        start = max(args.offset, 0)
+        page = ranked[start:start + args.limit]
+        out = [f"# topics: {len(ranked)} beats, ranked by published articles"]
+        for t in page:
             n = t.get("article_count")
-            counts = f"{n} articles" if (any_counts and n) else ""
-            out.append(f"- {str(t.get('name', '?'))[:28]:28} {counts}  [{t.get('slug', '')}]")
+            counts = f"{n} articles" if any_counts and n is not None else ""
+            parts = str(t.get("path") or "").split("/")
+            parent = names.get(parts[-2]) if len(parts) > 1 else None
+            under = f"  (under {parent})" if parent else ""
+            out.append(f"- {str(t.get('name', '?'))[:32]:32} {counts:>13}{under}  [{t.get('slug', '')}]")
         if not any_counts:
-            out.append("\n(The API reports 0 articles for every topic: these stats are not being "
-                       "populated, so read them as UNKNOWN, not as an empty beat. Use "
-                       "`browse --tag <slug>` for what a subject actually has.)")
-        out.append("\nA topic is the beat; `tags` is the subject vocabulary inside it.")
-        page = _paged(r)
-        if page:
-            out.append(page)
+            out.append("\n(The API reports no article counts for these beats, so read them as "
+                       "UNKNOWN, not as empty. These stats are not being populated; use "
+                       "`browse --tag <slug>` for what a beat actually has.)")
+        if not r.get("complete", True):
+            out.append(f"\n(Read the first {len(ranked)} of {r.get('total')} topic tags and ranked "
+                       "only those: the scan cap stopped it.)")
+        out.append("\nCounts are per beat and do not roll up into the parent named beside them.")
+        line = _paged({"count": len(page), "offset": start, "limit": args.limit,
+                       "has_more": start + len(page) < len(ranked), "total": len(ranked)})
+        if line:
+            out.append(line)
         return "\n".join(out)
 
     _emit(resp, args, render, mode="topics")
@@ -1193,13 +1263,18 @@ def cmd_topics(args):
 
 def cmd_tags(args):
     """The subject vocabulary: organizations, topics and locations that coverage
-    is filed under. `--category` narrows; the slug is what `browse --tag` takes."""
+    is filed under. `--category` narrows; the slug is what `browse --tag`
+    takes. Public: /tags answers without a key.
+
+    The category list is closed on purpose. The server IGNORES a category it does
+    not know and returns the whole vocabulary (checked 2026-09-29: an unknown
+    category answered all 600 tags), which would read as a filtered result."""
     params = {"limit": args.limit, "offset": args.offset}
     if args.query:
         params["q"] = args.query
     if args.category:
         params["category"] = args.category
-    resp = _guided(lambda: api_request("GET", "/tags", params))
+    resp = _guided(lambda: api_request("GET", "/tags", params, public=True))
 
     def render(r):
         rows = r.get("data") if isinstance(r, dict) else None
@@ -1207,6 +1282,13 @@ def cmd_tags(args):
             return json.dumps(r, indent=2, ensure_ascii=False)
         out = [f"# tags{': ' + repr(args.query) if args.query else ''}"
                + (f"  (category: {args.category})" if args.category else "")]
+        stray = sorted({str(t.get("category")) for t in rows
+                        if isinstance(t, dict) and args.category and t.get("category") != args.category})
+        if stray:
+            # The server answers an unfiltered list for a category it does not
+            # filter on. Say so, rather than let the heading above claim a filter.
+            out.append(f"(The server did NOT apply category={args.category}: rows include "
+                       f"{', '.join(stray)}. Treat this as the unfiltered vocabulary.)")
         if not rows:
             out.append("(no match)")
         for t in rows:
@@ -1509,12 +1591,14 @@ def main():
     p.add_argument("person_id", help="person id (from `people`)")
     _add_paging(p, 10)
 
-    p = sub.add_parser("topics", parents=[common], help="The broad beats, with article counts")
+    p = sub.add_parser("topics", parents=[common],
+                       help="The beats, ranked by published articles (public, no key)")
     _add_paging(p, 30)
 
-    p = sub.add_parser("tags", parents=[common], help="Subject vocabulary: orgs, topics, locations")
+    p = sub.add_parser("tags", parents=[common],
+                       help="Subject vocabulary: orgs, topics, locations (public, no key)")
     p.add_argument("query", nargs="?", default="", help="substring match on name/slug/aliases")
-    p.add_argument("--category", choices=("organization", "topic", "location"))
+    p.add_argument("--category", choices=TAG_CATEGORIES)
     _add_paging(p, 20)
 
     p = sub.add_parser("browse", parents=[common],

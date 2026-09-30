@@ -29,7 +29,8 @@ the tool can be pointed at a platform running locally. Anything that can set eit
 environment can make the client send your `Authorization: Bearer` header to a host of its choosing.
 If you did not set them, do not let anything else set them, and be wary of a shell profile or a
 `.env` you did not write. `check` prints the newsroom it is actually pointed at, on the first line,
-for exactly this reason.
+for exactly this reason. The key goes only where it buys something: `digest`, `topics` and `tags`
+read public endpoints and send no `Authorization` header even when a key is set.
 
 **It reads `.env` and `.env.local` from the current directory**, not only from beside the script, so
 that the key is found whether you run from the project root or the script's folder. Values are

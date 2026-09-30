@@ -9,6 +9,7 @@ fail with guidance rather than a traceback.
 
     python3 -m pytest test_news_desk.py -q
 """
+import json
 import re
 import subprocess
 import sys
@@ -529,7 +530,7 @@ class TestReadSurfaceCoverage:
     topics and the article list. Each is a GET, and each must STAY one."""
 
     @pytest.mark.parametrize("fn,path", [
-        ("cmd_people", "/persons"), ("cmd_topics", "/topics"),
+        ("cmd_people", "/persons"), ("_read_topic_tags", "/tags"),
         ("cmd_tags", "/tags"), ("cmd_browse", "/articles"),
     ])
     def test_each_new_mode_is_a_single_read(self, fn, path):
@@ -592,10 +593,12 @@ class TestPersonRecordUnwrapping:
 
 
 class TestTopicCountsAreNotFakedAsZero:
-    """/topics returns article_count / source_count / total_views and on
-    2026-09-09 every one of the 15 topics reported 0 for all three. Printing
-    '0 articles' against a beat that has coverage reads as 'nothing published
-    here', which is the same lie an empty result set tells."""
+    """The retired /topics returned article_count / source_count / total_views
+    and on 2026-09-09 every one of its 15 topics reported 0 for all three.
+    Printing '0 articles' against a beat that has coverage reads as 'nothing
+    published here', which is the same lie an empty result set tells. `topics`
+    reads topic tags now, whose counts are real; the guard stays in case a
+    vocabulary ever arrives with none."""
 
     def _render(self, monkeypatch, capsys, rows):
         monkeypatch.setattr(ad, "api_request", lambda *a, **k: {"data": rows})
@@ -877,13 +880,28 @@ def _frontmatter():
     """Parse SKILL.md's YAML frontmatter without a YAML dependency.
 
     The client is stdlib-only and its tests should not be the thing that drags
-    PyYAML in. This handles exactly the three shapes the file uses: `key: value`,
-    `key: >-` with an indented folded block, and `key:` with an indented map."""
+    PyYAML in. This handles exactly the four shapes the file uses: `key: value`,
+    `key: >-` with an indented folded block, `key:` with an indented map, and,
+    inside that map, a value written as a JSON-style flow mapping (`k: {...}`,
+    which may continue over indented lines). That last one is valid YAML and is
+    parsed here as JSON, so a malformed one fails loudly rather than reading as
+    a string."""
     text = SKILL_MD.read_text()
     assert text.startswith("---\n"), "SKILL.md must open with YAML frontmatter"
     body = text.split("---\n", 2)[1]
     out, key, folded, mapping = {}, None, [], None
+    flow_key, flow = None, None
+
+    def balanced(s):
+        return s.count("{") + s.count("[") == s.count("}") + s.count("]")
+
     for raw in body.splitlines():
+        if flow is not None:
+            flow.append(raw.strip())
+            if balanced(" ".join(flow)):
+                mapping[flow_key] = json.loads(" ".join(flow))
+                flow_key, flow = None, None
+            continue
         if not raw.strip():
             continue
         indented = raw.startswith("  ")
@@ -892,7 +910,14 @@ def _frontmatter():
             continue
         if indented and mapping is not None:
             k, _, v = raw.strip().partition(":")
-            mapping[k.strip()] = v.strip().strip('"').strip("'")
+            v = v.strip()
+            if v.startswith("{"):
+                if balanced(v):
+                    mapping[k.strip()] = json.loads(v)
+                else:
+                    flow_key, flow = k.strip(), [v]
+                continue
+            mapping[k.strip()] = v.strip('"').strip("'")
             continue
         if key and folded:
             out[key] = " ".join(folded)
@@ -935,12 +960,22 @@ class TestSkillMdMeetsTheSpec:
         c = _frontmatter().get("compatibility", "")
         assert len(c) <= 500, f"compatibility is {len(c)} chars, spec max is 500"
 
+    # The one key allowed to hold an object. ClawHub's parser reads runtime
+    # declarations from metadata.openclaw and ignores it unless it IS an object
+    # (openclaw/clawhub, convex/lib/skills/index.ts, read 2026-09-29), so the
+    # registry's format and the spec's flat map conflict on exactly this key.
+    REGISTRY_KEYS = {"openclaw"}
+
     def test_metadata_is_a_flat_string_map(self):
         """Spec: 'a map from string keys to string values'. A nested structure
-        here parses for us and is invalid for a stricter client."""
+        here parses for us and is invalid for a stricter client. The one
+        exception is named above, and it is an exception rather than a relaxed
+        rule: every OTHER key must still be string to string."""
         md = _frontmatter().get("metadata", {})
         assert isinstance(md, dict) and md, "metadata should carry the extras"
         for k, v in md.items():
+            if k in self.REGISTRY_KEYS:
+                continue
             assert isinstance(k, str) and isinstance(v, str), f"{k}={v!r} is not string to string"
 
     def test_body_stays_inside_the_progressive_disclosure_budget(self):
@@ -967,7 +1002,11 @@ class TestSkillMdMeetsTheSpec:
         declared = _frontmatter().get("license", "")
         assert declared, "license should be declared for a skill meant to be installed"
         bundled = (SKILL_MD.parent.parent.parent / "LICENSE").read_text()
-        assert declared.lower() in bundled.lower().split("\n")[0].lower(), \
+        # SPDX id -> the first line of that license's canonical text. A substring
+        # check stopped working at MIT-0, whose text opens "MIT No Attribution".
+        titles = {"MIT": "MIT License", "MIT-0": "MIT No Attribution"}
+        assert declared in titles, f"no known canonical title for {declared!r}; add it"
+        assert bundled.splitlines()[0].strip() == titles[declared], \
             f"frontmatter says {declared!r}, LICENSE says {bundled.splitlines()[0]!r}"
 
 
@@ -1267,6 +1306,243 @@ class TestEnvParsing:
         Windows is a code page, so the same file decoded differently per machine."""
         import inspect
         assert 'encoding="utf-8"' in inspect.getsource(ad._load_env)
+
+
+# --------------------------------------------------------------------------
+# What a skill registry reads. ClawHub publishes the skill folder and runs a
+# security analysis that checks what a skill DECLARES against what its code
+# DOES; an environment variable read but not declared is flagged as a mismatch
+# (openclaw/clawhub docs/skill-format.md, read 2026-09-29). These catch that
+# here first, along with the catalog copy's limits and the bundle's contents.
+# --------------------------------------------------------------------------
+
+SKILL_DIR = SKILL_MD.parent
+
+
+def _env_vars_the_code_reads():
+    """Every environment variable news_desk.py reads by name. A literal is taken
+    as written; an identifier is resolved through the module, so KEY_ENV counts
+    as the variable it names. Anything this cannot resolve fails the test rather
+    than being skipped, because an unseen read is the case the check exists for."""
+    src = Path(SCRIPT).read_text()
+    names = set()
+    for m in re.finditer(r'os\.(?:environ\.get|getenv)\(\s*(?:"([A-Z0-9_]+)"|([A-Za-z_][A-Za-z0-9_]*))', src):
+        literal, ident = m.groups()
+        if literal:
+            names.add(literal)
+        else:
+            value = getattr(ad, ident, None)
+            assert isinstance(value, str), f"cannot resolve env read os.environ.get({ident})"
+            names.add(value)
+    assert not re.search(r"os\.environ\[", src), "subscripted env reads are not covered here"
+    return names
+
+
+class TestRegistryMetadata:
+    def _openclaw(self):
+        oc = _frontmatter()["metadata"].get("openclaw")
+        assert isinstance(oc, dict), "metadata.openclaw must be an OBJECT or ClawHub ignores it"
+        return oc
+
+    def test_declared_env_matches_what_the_code_reads(self):
+        declared = {e["name"] for e in self._openclaw().get("envVars", [])}
+        read = _env_vars_the_code_reads()
+        assert read - declared == set(), f"read but not declared: {sorted(read - declared)}"
+        assert declared - read == set(), f"declared but never read: {sorted(declared - read)}"
+
+    def test_the_key_is_the_primary_env(self):
+        assert self._openclaw().get("primaryEnv") == ad.KEY_ENV
+
+    def test_nothing_is_declared_required(self):
+        """digest, topics and tags run with no key, so no variable is one the
+        skill 'cannot run without', which is what requires.env asserts."""
+        oc = self._openclaw()
+        assert not (oc.get("requires") or {}).get("env"), "requires.env would claim the skill cannot run"
+        assert all(e.get("required") is False for e in oc["envVars"])
+
+    def test_every_declaration_says_what_it_is_for(self):
+        assert all(str(e.get("description", "")).strip() for e in self._openclaw()["envVars"])
+
+    def test_user_agent_carries_the_skill_version(self):
+        """The UA said news-desk/1.1 while the skill shipped 1.2.0."""
+        assert ad.UA == f"news-desk/{_frontmatter()['metadata']['version']}"
+
+    def test_no_template_variables_in_skill_md(self):
+        """`{{API_KEY}}` and `${TOKEN}` in examples are reported to trigger
+        registry malware scanning; the examples use `cn_...` instead."""
+        text = SKILL_MD.read_text()
+        assert "{{" not in text and "${" not in text
+
+
+def _catalog():
+    """agents/openai.yaml's interface block, parsed without a YAML dependency:
+    `key: "value"` lines and `key: >-` folded blocks, the two shapes it uses."""
+    out, key, folded = {}, None, None
+    for raw in (SKILL_DIR / "agents" / "openai.yaml").read_text().splitlines():
+        if raw.lstrip().startswith("#") or not raw.strip() or raw.strip() == "interface:":
+            continue
+        if folded is not None and raw.startswith("    "):
+            folded.append(raw.strip())
+            continue
+        if folded is not None:
+            out[key], folded = " ".join(folded), None
+        k, _, v = raw.strip().partition(":")
+        key, v = k.strip(), v.strip()
+        if v in (">-", ">"):
+            folded = []
+        else:
+            out[key] = v.strip('"')
+    if folded is not None:
+        out[key] = " ".join(folded)
+    return out
+
+
+class TestCatalogPresentation:
+    """ClawHub resolves the listing's name and summary from agents/openai.yaml
+    ahead of SKILL.md (convex/lib/skillPresentation.ts, read 2026-09-29), and
+    truncates past 120 and 300 characters."""
+
+    def test_display_name_fits(self):
+        name = _catalog().get("display_name", "")
+        assert name and len(name) <= 120, f"display_name is {len(name)} chars, max 120"
+
+    def test_short_description_fits(self):
+        desc = _catalog().get("short_description", "")
+        assert desc and len(desc) <= 300, f"short_description is {len(desc)} chars, max 300"
+
+    def test_catalog_states_where_coverage_is_live(self):
+        """'Local News API' invites a reader anywhere to expect their own town.
+        The summary is where the scope is stated, so it must stay stated."""
+        assert "Alaska News" in _catalog()["short_description"]
+
+    def test_catalog_says_read_only(self):
+        assert "Read-only" in _catalog()["short_description"]
+
+
+class TestRegistryBundle:
+    """What the registry receives is the skill folder minus .clawhubignore."""
+
+    def _ignored(self):
+        return {ln.strip() for ln in (SKILL_DIR / ".clawhubignore").read_text().splitlines()
+                if ln.strip() and not ln.startswith("#")}
+
+    def test_tests_stay_out_of_the_bundle(self):
+        """The tests read README.md and LICENSE from the repo root, so an installed
+        copy would fail; and SKILL.md must then not send an agent to run them."""
+        assert "scripts/test_news_desk.py" in self._ignored()
+        assert "test_news_desk" not in SKILL_MD.read_text()
+
+    def test_key_files_stay_out_of_the_bundle(self):
+        assert {".env", ".env.local"} <= self._ignored()
+
+    def test_skill_md_links_stay_inside_the_folder(self):
+        """A link out of the skill folder resolves in the repository and is dead
+        in an installed copy, which is the only copy a registry user has."""
+        for target in re.findall(r"\]\(([^)#\s]+)", SKILL_MD.read_text()):
+            if target.startswith(("http://", "https://", "mailto:")):
+                continue
+            resolved = (SKILL_DIR / target).resolve()
+            assert SKILL_DIR.resolve() in resolved.parents or resolved == SKILL_DIR.resolve(), \
+                f"{target} leaves the skill folder"
+
+
+class TestTopicsReadTheLiveVocabulary:
+    """`topics` read GET /topics until 2026-09-29: the retired taxonomy, marked
+    deprecated in the platform's own OpenAPI spec, whose counts were all zero."""
+
+    ROWS = [
+        {"name": "Politics & Government", "slug": "politics-government", "path": "politics-government",
+         "article_count": 28},
+        {"name": "Government", "slug": "government", "path": "politics-government/government",
+         "article_count": 556},
+        {"name": "Health", "slug": "health", "path": "people-culture/health", "article_count": 264},
+        {"name": "People & Culture", "slug": "people-culture", "path": "people-culture",
+         "article_count": 10},
+    ]
+
+    def _run(self, monkeypatch, capsys, **kw):
+        seen = []
+
+        def fake(method, path, params=None, **k):
+            seen.append((method, path, dict(params or {}), k.get("public")))
+            return {"data": self.ROWS, "total": 4, "has_more": False}
+        monkeypatch.setattr(ad, "api_request", fake)
+        ad.cmd_topics(_Args(**kw))
+        return seen, capsys.readouterr().out
+
+    def test_it_reads_topic_tags_not_the_retired_endpoint(self, monkeypatch, capsys):
+        seen, _ = self._run(monkeypatch, capsys, limit=10)
+        assert [(m, p) for m, p, *_ in seen] == [("GET", "/tags")]
+        assert seen[0][2]["category"] == "topic"
+        assert '"/topics"' not in Path(SCRIPT).read_text()
+
+    def test_it_is_a_public_read(self, monkeypatch, capsys):
+        seen, _ = self._run(monkeypatch, capsys, limit=10)
+        assert seen[0][3] is True
+
+    def test_beats_are_ranked_by_coverage_and_name_their_parent(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys, limit=10)
+        rows = [ln for ln in out.splitlines() if ln.startswith("- ")]
+        assert rows[0].startswith("- Government") and "556 articles" in rows[0]
+        assert "(under Politics & Government)" in rows[0]
+        assert rows[1].startswith("- Health")
+
+    def test_paging_pages_the_ranked_list(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys, limit=1, offset=1)
+        rows = [ln for ln in out.splitlines() if ln.startswith("- ")]
+        assert len(rows) == 1 and rows[0].startswith("- Health")
+        assert "showing 2-2 of 4" in out and "--offset 2" in out
+
+    def test_it_reads_every_page_before_ranking(self, monkeypatch):
+        pages = [{"data": [{"slug": f"t{i}"} for i in range(100)], "total": 150, "has_more": True},
+                 {"data": [{"slug": f"u{i}"} for i in range(50)], "total": 150, "has_more": False}]
+        offsets = []
+
+        def fake(method, path, params=None, **k):
+            offsets.append(params["offset"])
+            return pages[len(offsets) - 1]
+        monkeypatch.setattr(ad, "api_request", fake)
+        got = ad._read_topic_tags()
+        assert offsets == [0, 100] and len(got["data"]) == 150 and got["complete"] is True
+
+
+class TestPublicReadsCarryNoKey:
+    def test_a_public_request_sends_no_credential_even_with_a_key_set(self, monkeypatch):
+        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_" + "0" * 40)
+        assert ad._auth_header(public=True) == {}
+
+    def test_a_keyed_request_still_sends_it(self, monkeypatch):
+        monkeypatch.setenv("NEWS_DESK_API_KEY", "cn_" + "0" * 40)
+        assert ad._auth_header(public=False) == {"Authorization": "Bearer cn_" + "0" * 40}
+
+    def test_tags_is_a_public_read(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(ad, "api_request",
+                            lambda m, p, params=None, **k: (seen.update(k), {"data": []})[1])
+        ad.cmd_tags(_Args())
+        assert seen.get("public") is True
+
+
+class TestTagCategoryFilterIsNotTakenOnTrust:
+    def test_an_ignored_filter_is_called_out(self, monkeypatch, capsys):
+        """The server answers the whole vocabulary for a category it does not
+        filter on (checked 2026-09-29 with `election`), under a heading that
+        would otherwise claim the filter."""
+        rows = [{"name": "A", "slug": "a", "category": "topic"},
+                {"name": "B", "slug": "b", "category": "organization"}]
+        monkeypatch.setattr(ad, "api_request", lambda *a, **k: {"data": rows})
+        ad.cmd_tags(_Args(category="topic"))
+        assert "did NOT apply category=topic" in capsys.readouterr().out
+
+    def test_a_honoured_filter_is_not_questioned(self, monkeypatch, capsys):
+        rows = [{"name": "A", "slug": "a", "category": "topic"}]
+        monkeypatch.setattr(ad, "api_request", lambda *a, **k: {"data": rows})
+        ad.cmd_tags(_Args(category="topic"))
+        assert "did NOT apply" not in capsys.readouterr().out
+
+    def test_only_categories_the_server_filters_are_offered(self):
+        assert set(ad.TAG_CATEGORIES) == {"organization", "topic", "location"}
+        assert "election" not in run("tags", "--help").stdout.split("--category")[1][:80]
 
 
 if __name__ == "__main__":

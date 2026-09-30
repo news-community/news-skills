@@ -10,17 +10,25 @@ description: >-
   even when the request never says "API" or names the newsroom, as in "has anyone reported on
   this", "when does the assembly next meet", "what did the mayor say about the port", "find
   me what was written before", or "is there a public comment deadline coming up".
-license: MIT
+license: MIT-0
 compatibility: >-
   Python 3.9+, standard library only, no third-party packages. Needs network access to a
-  Communities News newsroom (alaskanews.com unless NEWS_SITE says otherwise) and, for every
-  mode except digest, that newsroom's own cn_ API key in NEWS_DESK_API_KEY.
+  Communities News newsroom (alaskanews.com unless NEWS_SITE says otherwise) and, for most
+  modes, that newsroom's own cn_ API key in NEWS_DESK_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   author: Communities News LLC
-  homepage: https://github.com/news-community/news-skills
+  homepage: https://communities.news
   repository: news-community/news-skills
+  openclaw: {"primaryEnv": "NEWS_DESK_API_KEY", "requires": {"bins": ["python3"]},
+    "homepage": "https://communities.news",
+    "envVars": [
+      {"name": "NEWS_DESK_API_KEY", "required": false, "description": "The newsroom's cn_ API key. digest, topics and tags run without it."},
+      {"name": "ALASKA_DESK_API_KEY", "required": false, "description": "Legacy name for NEWS_DESK_API_KEY, still honoured."},
+      {"name": "NEWS_SITE", "required": false, "description": "Newsroom origin; defaults to https://alaskanews.com."},
+      {"name": "NEWS_COMMUNITY", "required": false, "description": "Community slug; defaults to alaska-news."},
+      {"name": "PLATFORM_API_BASE", "required": false, "description": "Overrides the API base derived from NEWS_SITE."}]}
 ---
 
 # news-desk
@@ -42,7 +50,7 @@ part of this tool. news-desk is for people building on Alaska News reporting fro
 |---|---|
 | **Audience** | external Alaska creators, one per key |
 | **Direction** | READ ONLY. No `PATCH` / `PUT` / `DELETE`; its only `POST` is the read-only RAG query. A test enforces this. |
-| **Auth** | **your own** `cn_` API key (`NEWS_DESK_API_KEY`), ideally created **read-only**. `digest` needs none. |
+| **Auth** | **your own** `cn_` API key (`NEWS_DESK_API_KEY`), ideally created **read-only**. `digest`, `topics` and `tags` need none. |
 | **Output** | rendered markdown by default (paste into your draft), `--json` for raw. Every response carries the site's usage terms. |
 | **Newsroom** | alaskanews.com by default, and that is a DEFAULT not a limit: `NEWS_SITE` + `NEWS_COMMUNITY` point it elsewhere. |
 | **Runs on** | [`scripts/news_desk.py`](scripts/news_desk.py), Python 3, standard library only, no dependencies. |
@@ -111,7 +119,7 @@ Access is tiered on the platform side, and your key may not reach everything.
 | `communities` | **any valid key** | the slugs `--community` accepts |
 | `browse` | **any valid key** | the published article list; `--tag` for one beat |
 | `people` / `person` | **any valid key** | speaker directory, and one actor's coverage |
-| `topics` / `tags` | **any valid key** | beats, and the subject vocabulary inside them |
+| `topics` / `tags` | **public** | beats ranked by coverage, and the subject vocabulary. Verified 2026-09-29 |
 | `rag` | **role-gated** | an external consumer key saw 403 on 2026-07-23; slow (~1-2 min) where allowed |
 | `clip` | **id only** | resolves a known id to its public MP4 URL. You cannot BROWSE clips: see below |
 
@@ -162,15 +170,15 @@ python3 scripts/news_desk.py clip <clip-id>                      # resolve a kno
 python3 scripts/news_desk.py communities                         # slugs valid for --community
 python3 scripts/news_desk.py people "dunleavy"                   # the Who axis: named speakers
 python3 scripts/news_desk.py person <person-id>                  # one actor + the coverage they appear in
-python3 scripts/news_desk.py topics                              # the broad beats
+python3 scripts/news_desk.py topics                              # the beats, ranked by coverage
 python3 scripts/news_desk.py tags "port" --category organization # the subject vocabulary
 ```
 
-**Two vocabularies, and they are not the same.** `topics` is the ~15 broad beats (Health, Education,
-Government). `tags` is the specific subject vocabulary inside them (Ambler Road, Alaska LNG, Cook
-Inlet gas), categorised as `organization`, `topic` or `location`. A tag slug is what `browse --tag`
-takes. Note that `/topics` currently reports **0 articles for every beat**: those stats are not being
-populated, so the client suppresses them rather than printing a zero that reads as "no coverage".
+**`topics` is the beats; `tags` is the whole vocabulary.** `topics` lists the topic-category tags
+(Government, Infrastructure, Health...) ranked by articles published, each naming its parent; counts
+do not roll up into the parent. `tags` searches every tag: `organization`, `topic` or `location`. A
+slug from either is what `browse --tag` takes. Both are public. (`topics` read the retired `/topics`
+endpoint until 1.3.0, whose counts were all zero.)
 
 **`browse` vs `search`.** `search` answers "what do you have about X". `browse` answers "what has
 been published", which is the question you ask before you know what X is. `--sort` takes
@@ -317,16 +325,3 @@ them is quotable. Open the article and confirm before you attribute words to any
 
 Everything else on the read surface that a consumer key reaches is now wrapped. What remains
 unwrapped is write-side or editor-only, and out of scope by design.
-
----
-
-## Development
-
-Tests, the contribution rules and the SKILL.md conformance checks live in
-[`CONTRIBUTING.md`](../../CONTRIBUTING.md) at the repo root. They are kept there rather than here on
-purpose: this file is loaded into an agent's context on every run, and how to run pytest is not
-something the agent needs in order to do the work.
-
-```bash
-python3 -m pytest scripts/test_news_desk.py -q   # offline; no key, no network
-```

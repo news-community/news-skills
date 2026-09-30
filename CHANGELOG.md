@@ -6,6 +6,44 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.3.0 - 2026-09-29
+
+Readiness for skill registries, and one mode moved off an endpoint the platform has retired.
+
+### Changed
+
+- **License is now MIT-0** (MIT No Attribution), from MIT. Use, modify and redistribute with no
+  attribution required. Skill registries such as ClawHub publish every skill under MIT-0 and accept
+  no other terms, so the repository matches what a registry would state. The newsroom's content
+  terms are unaffected and are still read from the newsroom on every run.
+- **`topics` reads topic tags instead of the retired `/topics` endpoint.** The platform's OpenAPI
+  spec marks `/topics` deprecated ("Use `GET /api/v1/tags` instead"), and every beat it listed
+  reported 0 articles. `topics` now lists the topic-category tags ranked by articles published
+  (Government 556, Infrastructure 345, Commercial Fisheries 299 on alaskanews.com today), names
+  each one's parent, and pages the ranked list. Every slug it prints works with `browse --tag`.
+- **`topics` and `tags` need no key.** `/tags` answers without one, and a public request now sends
+  no credential even when a key is set: it buys nothing there, and it is one more place the key
+  would go.
+- The User-Agent carries the skill's real version (`news-desk/1.3.0`); it said `1.1` through 1.2.0.
+
+### Fixed
+
+- `tags --category` is taken on trust no longer. The server ignores a category it does not filter
+  on and answers the whole vocabulary: `election` exists on 67 tags but `category=election`
+  returned all 600. `tags` now says when the rows do not match the filter it asked for, and offers
+  only the three categories the server filters (`organization`, `topic`, `location`).
+
+### Added
+
+- `metadata.openclaw` in `SKILL.md` declares every environment variable the client reads, all
+  optional, with `NEWS_DESK_API_KEY` as the primary. A test holds the declaration and the code
+  equal in both directions.
+- `agents/openai.yaml` carries the name and short summary a skill catalog shows, kept separate from
+  `SKILL.md`'s `description`, which is written for the agent.
+- `.clawhubignore` keeps the test file and any `.env` out of a registry bundle. `SKILL.md` no longer
+  links outside its own folder or points an agent at the tests; the Development notes it carried
+  are in `CONTRIBUTING.md`.
+
 ## 1.2.0 - 2026-09-10
 
 Findings from two external code reviews. Every one was reproduced before it was fixed.

@@ -30,9 +30,11 @@ So if you add or change a mode, or write anything about what an endpoint returns
    confirm that an endpoint exists and returns a given shape; it cannot confirm reach.
 3. **Prefer a renderer that degrades.** Every mode falls back to raw JSON if a payload shape
    changes, and `--json` always returns the untouched payload. Keep it that way.
-4. **Do not print a number the data does not support.** `/topics` returns `article_count: 0` for
-   every beat; rendering that as "0 articles" would read as "no coverage exists", which is false.
-   Suppress it and say why. The same reasoning applies to an empty result set from a mistyped
+4. **Do not print a number the data does not support.** The retired `/topics` endpoint returned
+   `article_count: 0` for every beat; rendering that as "0 articles" would have read as "no coverage
+   exists", which was false. It was suppressed with the reason, and `topics` now reads topic tags,
+   whose counts are real. The same goes for a filter the server silently ignores: `tags` says so
+   rather than print the unfiltered list under a filtered heading. The same reasoning applies to an empty result set from a mistyped
    corpus, which is why corpus names are validated before the request goes out.
 
 ## Running the tests
@@ -75,6 +77,19 @@ specification](https://agentskills.io/specification), and `TestSkillMdMeetsTheSp
 constraints: `name` lowercase-and-hyphens under 64 characters, `description` non-empty and under
 1024, `compatibility` under 500, `metadata` a flat map of strings to strings, and a declared
 `license` that matches the bundled `LICENSE` file.
+
+**One metadata key is an object, deliberately.** `metadata.openclaw` declares the environment
+variables the client reads, for skill registries such as ClawHub, whose security analysis flags a
+skill that reads a variable it does not declare. Registries read that key only as an object, so it
+is the single exception to the flat map, and `TestRegistryMetadata` holds it in both directions:
+**if you make the client read a new environment variable, declare it there**, or the suite fails.
+The listing a registry shows (display name and short summary) lives in
+`skills/news-desk/agents/openai.yaml`, not in `SKILL.md`: the `description` field is what an agent
+reads to decide when to use the skill, and it stays written for that job.
+
+**What a registry installs is the skill folder minus `.clawhubignore`**, which leaves out the test
+file. So nothing in `SKILL.md` may link outside `skills/news-desk/` or tell an agent to run the
+tests; `TestRegistryBundle` checks both.
 
 Two things follow for anyone editing it:
 
