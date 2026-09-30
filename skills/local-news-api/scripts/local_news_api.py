@@ -88,7 +88,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.5.0"
+UA = "local-news-api/1.6.0"
 
 
 def site():
@@ -757,25 +757,21 @@ def _emit(obj, args, render=None, mode=""):
 
 # --- digest --date: one day's stories, read from the public feed ----------------
 #
-# Measured against the live feed on 2026-09-29, and each fact below is why the
-# code looks the way it does:
-#   - /feed answers without a key, and /articles does not, so a keyless daily
-#     briefing has to come from /feed.
-#   - It ignores its documented `community` parameter (any value answered the same
-#     rows), so rows are filtered here by their own `communities.slug`.
-#   - Its paging metadata is wrong: every page says has_more=false and total=count,
-#     yet the next offset answers another page. So it is paged until empty or until
-#     the stop rule below, never on has_more.
-#   - It is ranked, not chronological. By `_sortDate` the worst straggler seen in
-#     1,000 rows arrived about 7 days behind stories older than it; by published_at
-#     stories resurface up to a year late. published_at was never later than
-#     _sortDate, so a story published on a day always sorts at or after that day's
-#     start, and the scan can stop once it is FEED_STRAGGLE past it.
-#   - Pages overlap (978 unique ids in 1,000 rows), so rows are de-duplicated.
-DEFAULT_TZ = "America/Anchorage"   # the default newsroom's own zone; the API reports none
+# GET /api/v1/feed answers without a key (/articles does not), so a keyless daily
+# briefing comes from it. Since the platform fix of 2026-09-30 it filters by
+# `community` (a slug; an unknown one is a 404), takes `published_after`
+# (inclusive) and `published_before` (exclusive) as ISO 8601, reports the
+# newsroom's own time zone as `community.timezone` when one newsroom is in scope,
+# and pages exactly: `has_more` is true only when another page exists, and the
+# `next_page` link in `next_steps` carries `as_of` so every story lands on exactly
+# one page. So a day is one window query, paged by following that link.
+#
+# The feed's ORDER is still ranked, deliberately, so the day comes from the date
+# parameters, never from the order. And the client still checks that the rows it
+# got are the ones it asked for, because a server that ignores a filter answers
+# with a list that looks like a filtered one.
 FEED_PAGE = 100
-FEED_SCAN_CAP = 40                 # pages: 4,000 stories, about three months at today's rate
-FEED_STRAGGLE = _dt.timedelta(days=8)
+FEED_PAGE_CAP = 20      # 2,000 stories: far past any real day, a guard against a runaway link
 
 _TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(?:\.(\d+))?)?"
                     r"\s*(Z|[+-]\d\d:?\d\d)?$")
@@ -783,8 +779,9 @@ _TS_RE = re.compile(r"(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d)(?::(\d\d)(?:\.(\d+)
 
 def _parse_ts(value):
     """An API timestamp as an aware UTC datetime, or None. Written by hand because
-    Python 3.9's fromisoformat, this client's floor, rejects the 5-digit fractional
-    seconds the API emits ("19:12:56.45725+00:00"). No offset is read as UTC."""
+    Python 3.9's fromisoformat, this client's floor, rejects fractional seconds
+    with trailing zeros trimmed ("19:12:56.45725+00:00"), which the API emits.
+    No offset is read as UTC."""
     if isinstance(value, (int, float)):
         secs = value / 1000 if value > 1e11 else value
         return _dt.datetime.fromtimestamp(secs, _dt.timezone.utc)
@@ -800,15 +797,24 @@ def _parse_ts(value):
     return ts
 
 
-def _day_zone(explicit):
-    """(tzinfo, name, note) for counting days. An explicit --tz that does not
-    exist is an error; the DEFAULT zone missing from this machine's tz database
-    falls back to UTC, and the note says so. A newsroom other than the default gets
-    UTC unless told otherwise, because the API does not say where a newsroom is."""
-    name = explicit or (DEFAULT_TZ if site() == DEFAULT_SITE else None)
+def _utc_iso(ts):
+    return ts.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _feed_zone(community):
+    """The newsroom's time zone as the public feed reports it, or None."""
+    resp = api_request("GET", "/feed", {"community": community, "limit": 1}, public=True)
+    return ((resp.get("community") or {}).get("timezone")) if isinstance(resp, dict) else None
+
+
+def _day_zone(explicit, reported):
+    """(tzinfo, name, note) for counting days. An explicit --tz that does not exist
+    is an error. The newsroom's reported zone missing from this machine's tz
+    database, or no zone reported at all, falls back to UTC, and the note says so."""
+    name = explicit or reported
     if not name:
-        return (_dt.timezone.utc, "UTC", "Days are counted in UTC: this newsroom's time zone is "
-                "not known to the client. Pass --tz <Area/City> for local days.")
+        return (_dt.timezone.utc, "UTC", "Days are counted in UTC: the newsroom did not report "
+                "its time zone. Pass --tz <Area/City> for local days.")
     try:
         from zoneinfo import ZoneInfo
         return ZoneInfo(name), name, ""
@@ -830,50 +836,50 @@ def _parse_day(text, tz):
         sys.exit(f"--date takes YYYY-MM-DD, today or yesterday, not {text!r}.")
 
 
-def _sort_ts(row):
-    return (_parse_ts(row.get("_sortDate")) or _parse_ts(row.get("effective_arrival_at"))
-            or _parse_ts(row.get("published_at")))
+def _next_page_params(resp):
+    """The query of the feed's own next_page link, which carries as_of."""
+    for step in (resp.get("next_steps") or []):
+        if isinstance(step, dict) and step.get("rel") == "next_page" and step.get("href"):
+            return dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(step["href"]).query))
+    return None
 
 
 def _read_day_from_feed(day, tz, community):
-    """Every published story whose published_at falls on `day` in `tz`, from the
-    public feed. Returns the list envelope plus how far the scan reached, or the
-    first non-list response untouched so the renderer can fall back to it."""
-    start = _dt.datetime.combine(day, _dt.time(), tz).astimezone(_dt.timezone.utc)
-    end = _dt.datetime.combine(day + _dt.timedelta(days=1), _dt.time(), tz).astimezone(_dt.timezone.utc)
-    stop_before = start - FEED_STRAGGLE
-    seen, hits, scanned, reached, complete = set(), [], 0, None, False
-    for page_no in range(FEED_SCAN_CAP):
-        resp = api_request("GET", "/feed", {"limit": FEED_PAGE, "offset": page_no * FEED_PAGE,
-                                            "community": community}, public=True)
-        rows = resp.get("data") if isinstance(resp, dict) else None
-        if not isinstance(rows, list):
+    """Every story published on `day` in `tz`: one window query on the public feed,
+    paged by its next_page link. Returns the list envelope, or the first non-list
+    response untouched so the renderer can fall back to it."""
+    start = _dt.datetime.combine(day, _dt.time(), tz)
+    end = _dt.datetime.combine(day + _dt.timedelta(days=1), _dt.time(), tz)
+    params = {"community": community, "published_after": _utc_iso(start),
+              "published_before": _utc_iso(end), "limit": FEED_PAGE}
+    rows, seen, pages = [], set(), 0
+    while True:
+        resp = api_request("GET", "/feed", params, public=True)
+        data = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(data, list):
             return resp
-        if not rows:
-            complete = True
-            break
-        page_sorts = []
-        for r in rows:
-            if not isinstance(r, dict) or r.get("id") in seen:
-                continue
-            seen.add(r.get("id"))
-            scanned += 1
-            sort_at = _sort_ts(r)
-            if sort_at:
-                page_sorts.append(sort_at)
-            slug = (r.get("communities") or {}).get("slug")
-            if (slug and slug != community) or r.get("status") not in (None, "published"):
+        if "as_of" not in resp:
+            sys.exit("This newsroom's feed predates date filtering (its response carries no "
+                     "`as_of`), so `digest --date` cannot ask it for one day. Use `digest`.")
+        pages += 1
+        for r in data:
+            if not isinstance(r, dict):
                 continue
             pub = _parse_ts(r.get("published_at"))
-            if pub and start <= pub < end:
-                hits.append(r)
-        if page_sorts:
-            reached = min(page_sorts + ([reached] if reached else []))
-            if reached < stop_before:
-                complete = True
-                break
-    return {"data": hits, "scanned": scanned, "complete": complete,
-            "reached": reached.isoformat() if reached else None}
+            slug = (r.get("communities") or {}).get("slug")
+            if (pub and not (start <= pub < end)) or (slug and slug != community) or r.get("id") in seen:
+                sys.exit("The feed answered with stories outside what was asked for (another day, "
+                         "another newsroom, or a repeat), so its filters or paging were not applied. "
+                         "Nothing is printed rather than a wrong day.")
+            seen.add(r.get("id"))
+            if r.get("status") in (None, "published"):
+                rows.append(r)
+        if not resp.get("has_more"):
+            return {"data": rows, "pages": pages, "complete": True}
+        nxt = _next_page_params(resp)
+        if nxt is None or pages >= FEED_PAGE_CAP:
+            return {"data": rows, "pages": pages, "complete": False}
+        params = nxt
 
 
 def _day_story(r, tz, community):
@@ -889,7 +895,8 @@ def _day_story(r, tz, community):
 
 def cmd_digest_day(args):
     """One day's stories with a one-line summary each: the daily briefing. Public."""
-    tz, tz_name, tz_note = _day_zone(args.tz)
+    reported = None if args.tz else _guided(lambda: _feed_zone(args.community))
+    tz, tz_name, tz_note = _day_zone(args.tz, reported)
     day = _parse_day(args.date, tz)
     resp = _guided(lambda: _read_day_from_feed(day, tz, args.community))
     rows = resp.get("data") if isinstance(resp, dict) else None
@@ -898,15 +905,13 @@ def cmd_digest_day(args):
         return
     stories = sorted((_day_story(r, tz, args.community) for r in rows),
                      key=lambda s: s["published_at"] or "", reverse=True)
-    reached = (_parse_ts(resp.get("reached")) or None)
-    note = ("Read from the public feed, no key: " + f"{resp.get('scanned', 0)} stories scanned"
-            + (f", back to {reached.astimezone(tz).date().isoformat()}" if reached else "") + ".")
+    note = "Read from the public feed, no key."
     if not resp.get("complete"):
-        note += (" The scan cap stopped it before it was a week past this date, so stories may be "
-                 "missing: a date this old is better answered by `search` with --since/--until.")
+        note += (f" Stopped after {resp.get('pages')} pages without reaching the end of the day, "
+                 "so stories may be missing.")
     if args.json:
         print(json.dumps({"date": day.isoformat(), "time_zone": tz_name, "stories": stories,
-                          "scanned": resp.get("scanned"), "complete": resp.get("complete"),
+                          "pages": resp.get("pages"), "complete": resp.get("complete"),
                           "note": " ".join(x for x in (tz_note, note) if x)}, ensure_ascii=False))
         return
     name = urllib.parse.urlsplit(site()).netloc or site()
@@ -916,8 +921,7 @@ def cmd_digest_day(args):
     out = [f"# {name}, {day.strftime('%A')} {day.isoformat()}: {len(stories)} "
            f"{'story' if len(stories) == 1 else 'stories'}  (times in {tz_name})"]
     if not stories:
-        out.append(f"\nNo stories published on {day.isoformat()}"
-                   + ("." if resp.get("complete") else " in what was scanned."))
+        out.append(f"\nNo stories published on {day.isoformat()}.")
     for s in stories:
         where = f"  ({s['location']})" if s.get("location") else ""
         out.append(f"\n- {s.get('local_time') or '--:--'}  **{str(s.get('title') or '(untitled)').strip()}**{where}")
@@ -1901,7 +1905,7 @@ def main():
     p.add_argument("--date", metavar="YYYY-MM-DD",
                    help="one day's stories, each with its summary: a date, today or yesterday")
     p.add_argument("--tz", metavar="AREA/CITY",
-                   help="the time zone a day is counted in (default: the default newsroom's, else UTC)")
+                   help="the time zone a day is counted in (default: the one the newsroom reports)")
     sub.add_parser("check", parents=[common], help="What can my key reach?")
     sub.add_parser("communities", parents=[common],
                    help="List community slugs valid for --community")

@@ -19,7 +19,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.5.0"
+  version: "1.6.0"
   author: Communities News LLC
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -117,7 +117,7 @@ Access is tiered on the platform side, and your key may not reach everything.
 
 | Mode | Reach | Note |
 |---|---|---|
-| `digest` | **public** | recent stories; `--date` for one day's, a summary each. Verified 2026-09-29 |
+| `digest` | **public** | recent stories; `--date` for one day's, a summary each. Verified 2026-09-30 |
 | `search` | **any valid key** | six corpora; `external_documents` and `social_post` are editor/admin only |
 | `angles` | **any valid key** | discovery scaffold; runs on the `/search` surface |
 | `brief` | **any valid key** | research brief: one `/search`, arranged for a writer, then four blanks |
@@ -192,10 +192,9 @@ been published", which is the question you ask before you know what X is. `--sor
 `new`/`hot`/`top`/`popular`/`timeline`/`alphabetical`, and `--tag <slug>` lists a single beat.
 
 **A day's stories: `digest --date`.** `today`, `yesterday` or `YYYY-MM-DD`: every story published
-that day, newest first, with time, place, one-line summary and link. It reads the public feed, so no
-key. Days are counted in the default newsroom's zone (Alaska News: America/Anchorage); for another
-newsroom pass `--tz <Area/City>`, or it counts in UTC and says so. The feed is ranked rather than
-chronological, so it scans to a week past the day, and says when its three-month cap stops it.
+that day, newest first, with time, place, one-line summary and link. It asks the public feed for
+exactly that day, so no key. The day is the newsroom's own, in the time zone the feed reports
+(Alaska News: America/Anchorage); `--tz <Area/City>` overrides it.
 
 **A research brief: `brief "<topic>"`.** The step before writing. One `/search` across everything
 your key reaches, in a writer's order (prior coverage, the meeting record, people on the record,

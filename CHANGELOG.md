@@ -6,6 +6,24 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.6.0 - 2026-09-30
+
+### Changed
+
+- **`digest --date` asks for the day directly.** The platform fixed the public feed on 2026-09-30:
+  it now filters by `community`, takes `published_after` and `published_before`, pages exactly (an
+  `as_of` cursor, a true `has_more`, and a `next_page` link), and reports the newsroom's time zone.
+  So a day is one window query instead of a scan: the same 34 stories for 2026-09-29 in one request
+  where the scan read 300, and a June date the scan could not finish now completes in a second.
+- **Days are counted in the time zone the newsroom reports**, read from the feed without a key,
+  instead of a zone compiled into the client for the default newsroom. `--tz` still overrides it,
+  and a newsroom that reports none is counted in UTC, said aloud.
+- Gone with the platform's bugs: the week-long scan and its cap, filtering rows by community,
+  paging until empty, and de-duplicating across pages. What stays is a check that the rows are the
+  ones asked for (the right day, the right newsroom, no repeats), so a server that ignored a filter
+  stops the command instead of printing a wrong day; and the hand-written timestamp parser, since
+  the API still trims trailing zeros from fractional seconds, which Python 3.9 cannot read.
+
 ## 1.5.0 - 2026-09-30
 
 Two features carried over from the newsroom's own internal tools, adapted to what an outside reader
@@ -27,7 +45,7 @@ can reach.
 ### Measured, and built around
 
 The public feed was measured on 2026-09-29 before anything was built on it, and five facts shaped
-`digest --date`: it answers without a key while `/articles` does not; it **ignores its documented
+`digest --date` (all fixed on the platform the next day; see 1.6.0): it answers without a key while `/articles` does not; it **ignores its documented
 `community` parameter**, so rows are filtered by their own community; its **paging metadata is
 wrong** (`has_more` is always false while the next offset answers), so it is paged until a stop rule
 instead; it is **ranked, not chronological** (a story can arrive up to about a week behind older

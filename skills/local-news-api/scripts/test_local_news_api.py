@@ -556,16 +556,15 @@ class TestReadSurfaceCoverage:
         assert re.findall(r'api_request\(\s*"([A-Z]+)"', src) == ["GET", "GET"]
 
     def test_feed_is_read_only_by_the_keyless_day_reader(self):
-        """/feed was left unwrapped on 2026-09-09: it matched /articles?sort=new and
-        took no community param, so for a KEYED reader it was strictly less reach.
-        What changed the call is that /feed answers without a key and /articles does
-        not, so a keyless daily briefing can only come from /feed. It is used in one
-        place, as a public read, and nowhere a key would reach /articles instead."""
+        """/feed answers without a key and /articles does not, so the keyless daily
+        briefing reads /feed: for the day's stories and for the newsroom's time zone.
+        Both reads are public, and /feed is used nowhere else."""
         import inspect
         src = Path(SCRIPT).read_text()
-        assert src.count('"/feed"') == 1
-        assert '"/feed"' in inspect.getsource(ad._read_day_from_feed)
-        assert "public=True" in inspect.getsource(ad._read_day_from_feed)
+        assert src.count('"/feed"') == 2
+        for fn in (ad._read_day_from_feed, ad._feed_zone):
+            body = inspect.getsource(fn)
+            assert '"/feed"' in body and "public=True" in body
 
 
 class TestPersonRecordUnwrapping:
@@ -1659,39 +1658,55 @@ class TestTimestamps:
 
 
 class TestDayZone:
-    def test_the_default_newsroom_counts_days_in_its_own_zone(self, monkeypatch):
-        monkeypatch.delenv("NEWS_SITE", raising=False)
+    def test_the_newsrooms_reported_zone_is_used(self):
         pytest.importorskip("zoneinfo")
         try:
-            _, name, note = ad._day_zone(None)
+            _, name, note = ad._day_zone(None, "America/Anchorage")
         except SystemExit:
             pytest.skip("no tz database on this machine")
-        assert name in ("America/Anchorage", "UTC")
-        assert (name == "UTC") == bool(note), "a UTC fallback must say so"
+        assert (name, note) in {("America/Anchorage", "")} or name == "UTC"
 
-    def test_another_newsroom_gets_utc_and_is_told(self, monkeypatch):
-        """The API reports no time zone. Borrowing Alaska's for another newsroom
-        would count its evening stories on the wrong day, silently."""
-        monkeypatch.setenv("NEWS_SITE", "https://another-newsroom.example")
-        _, name, note = ad._day_zone(None)
+    def test_an_explicit_zone_wins(self):
+        _, name, _ = ad._day_zone("UTC", "America/Anchorage")
+        assert name == "UTC"
+
+    def test_no_reported_zone_means_utc_said_aloud(self):
+        """Borrowing any one newsroom's zone for another would count its evening
+        stories on the wrong day, silently."""
+        _, name, note = ad._day_zone(None, None)
         assert name == "UTC" and "--tz" in note
 
     def test_an_unknown_explicit_zone_is_an_error(self):
         with pytest.raises(SystemExit):
-            ad._day_zone("Mars/Olympus")
+            ad._day_zone("Mars/Olympus", None)
+
+    def test_the_zone_is_read_from_the_public_feed(self, monkeypatch):
+        seen = {}
+
+        def fake(method, path, params=None, **k):
+            seen.update(path=path, params=dict(params), public=k.get("public"))
+            return {"data": [], "as_of": "x", "community": {"slug": "alaska-news", "timezone": "America/Anchorage"}}
+        monkeypatch.setattr(ad, "api_request", fake)
+        assert ad._feed_zone("alaska-news") == "America/Anchorage"
+        assert seen == {"path": "/feed", "params": {"community": "alaska-news", "limit": 1}, "public": True}
 
 
-def _feed_row(i, published, sort_ms=None, slug="alaska-news", status="published"):
-    pub = ad._parse_ts(published)
+def _feed_row(i, published, slug="alaska-news", status="published"):
     return {"id": f"a{i}", "slug": f"story-{i}", "title": f"Story {i}", "tldr": f"Summary {i}.",
             "location": "Anchorage", "published_at": published, "status": status,
-            "_sortDate": sort_ms if sort_ms is not None else int(pub.timestamp() * 1000),
             "communities": {"slug": slug, "name": "Alaska News"}}
 
 
+def _page(rows, more=False, offset=0):
+    nxt = [{"rel": "next_page", "method": "GET",
+            "href": f"/api/v1/feed?community=alaska-news&as_of=T0&offset={offset + len(rows)}&limit=100"}]
+    return {"data": rows, "as_of": "T0", "has_more": more, "next_steps": nxt if more else []}
+
+
 class TestDayFromTheFeed:
-    """digest --date reads the public feed. Each test pins one measured fact about
-    that feed (the comment above _read_day_from_feed lists them)."""
+    """digest --date asks the public feed for exactly one day (published_after /
+    published_before, community), and pages by the feed's own next_page link,
+    which carries as_of. Platform fix of 2026-09-30."""
 
     UTC = __import__("datetime").timezone.utc
 
@@ -1700,90 +1715,90 @@ class TestDayFromTheFeed:
 
         def fake(method, path, params=None, **k):
             calls.append((method, path, dict(params or {}), k.get("public")))
-            i = params["offset"] // ad.FEED_PAGE
-            return pages[i] if i < len(pages) else {"data": [], "has_more": False}
+            return pages[len(calls) - 1] if len(calls) <= len(pages) else _page([])
         monkeypatch.setattr(ad, "api_request", fake)
         import datetime as dt
         out = ad._read_day_from_feed(dt.date.fromisoformat(day), tz or self.UTC, "alaska-news")
         return out, calls
 
-    def test_it_is_a_public_read_of_the_feed(self, monkeypatch):
-        _, calls = self._run(monkeypatch, [{"data": [_feed_row(1, "2026-09-29T12:00:00Z")]}])
-        assert {(m, p) for m, p, *_ in calls} == {("GET", "/feed")}
-        assert all(public is True for *_, public in calls)
+    def test_it_asks_for_the_day_window_as_a_public_read(self, monkeypatch):
+        _, calls = self._run(monkeypatch, [_page([_feed_row(1, "2026-09-29T12:00:00Z")])])
+        method, path, params, public = calls[0]
+        assert (method, path, public) == ("GET", "/feed", True)
+        assert params == {"community": "alaska-news", "published_after": "2026-09-29T00:00:00Z",
+                          "published_before": "2026-09-30T00:00:00Z", "limit": 100}
 
-    def test_the_day_is_counted_in_the_zone_given(self, monkeypatch):
-        """02:00 UTC on the 30th is 18:00 on the 29th in Anchorage."""
+    def test_the_window_is_the_day_in_the_newsrooms_zone(self, monkeypatch):
+        """A day in Anchorage (UTC-8 in September) runs 08:00Z to 08:00Z."""
         zi = pytest.importorskip("zoneinfo")
         try:
             ak = zi.ZoneInfo("America/Anchorage")
         except Exception:
             pytest.skip("no tz database on this machine")
-        pages = [{"data": [_feed_row(1, "2026-09-30T02:00:00Z"), _feed_row(2, "2026-09-29T07:00:00Z"),
-                           _feed_row(3, "2026-09-29T09:00:00Z")]}]
-        out, _ = self._run(monkeypatch, pages, tz=ak)
-        # 07:00 UTC on the 29th is 23:00 on the 28th in Anchorage (UTC-8), so a2 is
-        # the day before; 09:00 UTC is 01:00 on the 29th, so a3 is the day itself.
-        assert {r["id"] for r in out["data"]} == {"a1", "a3"}
+        _, calls = self._run(monkeypatch, [_page([])], tz=ak)
+        assert calls[0][2]["published_after"] == "2026-09-29T08:00:00Z"
+        assert calls[0][2]["published_before"] == "2026-09-30T08:00:00Z"
 
-    def test_has_more_false_is_not_believed(self, monkeypatch):
-        """Every feed page says has_more=false while the next offset answers."""
-        p1 = {"data": [_feed_row(1, "2026-09-29T12:00:00Z")], "has_more": False, "total": 1}
-        p2 = {"data": [_feed_row(2, "2026-09-29T11:00:00Z")], "has_more": False, "total": 1}
-        out, calls = self._run(monkeypatch, [p1, p2])
-        assert len(calls) >= 2 and {r["id"] for r in out["data"]} == {"a1", "a2"}
-
-    def test_it_stops_once_a_week_past_the_day(self, monkeypatch):
-        old = "2026-09-15T00:00:00Z"
-        pages = [{"data": [_feed_row(1, "2026-09-29T12:00:00Z")]},
-                 {"data": [_feed_row(2, old)]},
-                 {"data": [_feed_row(3, "2026-09-29T08:00:00Z")]}]
+    def test_it_follows_next_page_and_stops_on_has_more_false(self, monkeypatch):
+        pages = [_page([_feed_row(1, "2026-09-29T12:00:00Z")], more=True),
+                 _page([_feed_row(2, "2026-09-29T11:00:00Z")], more=False, offset=1)]
         out, calls = self._run(monkeypatch, pages)
-        assert len(calls) == 2 and out["complete"] is True
+        assert len(calls) == 2 and calls[1][2]["as_of"] == "T0" and calls[1][2]["offset"] == "1"
+        assert [r["id"] for r in out["data"]] == ["a1", "a2"] and out["complete"] is True
 
-    def test_a_straggler_inside_the_margin_is_still_found(self, monkeypatch):
-        """Ranked, not chronological: a story of the day may sort behind older ones."""
-        pages = [{"data": [_feed_row(1, "2026-09-25T00:00:00Z")]},
-                 {"data": [_feed_row(2, "2026-09-29T12:00:00Z")]}]
-        out, _ = self._run(monkeypatch, pages)
-        assert "a2" in {r["id"] for r in out["data"]}
-
-    def test_duplicates_and_other_newsrooms_are_dropped(self, monkeypatch):
-        """Pages overlap, and the feed ignores its community parameter."""
-        pages = [{"data": [_feed_row(1, "2026-09-29T12:00:00Z"), _feed_row(1, "2026-09-29T12:00:00Z"),
-                           _feed_row(2, "2026-09-29T11:00:00Z", slug="somewhere-else"),
-                           _feed_row(3, "2026-09-29T10:00:00Z", status="draft")]}]
-        out, _ = self._run(monkeypatch, pages)
-        assert [r["id"] for r in out["data"]] == ["a1"]
-
-    def test_the_cap_is_admitted(self, monkeypatch):
-        monkeypatch.setattr(ad, "FEED_SCAN_CAP", 2)
-        pages = [{"data": [_feed_row(i, "2026-09-29T12:00:00Z")]} for i in range(5)]
+    def test_a_runaway_next_page_is_capped_and_admitted(self, monkeypatch):
+        monkeypatch.setattr(ad, "FEED_PAGE_CAP", 2)
+        pages = [_page([_feed_row(i, "2026-09-29T12:00:00Z")], more=True, offset=i) for i in range(5)]
         out, calls = self._run(monkeypatch, pages)
         assert len(calls) == 2 and out["complete"] is False
+
+    @pytest.mark.parametrize("bad", [
+        _feed_row(9, "2026-09-28T12:00:00Z"),                   # another day
+        _feed_row(9, "2026-09-29T12:00:00Z", slug="elsewhere"),  # another newsroom
+    ])
+    def test_an_ignored_filter_stops_rather_than_prints_a_wrong_day(self, monkeypatch, bad):
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, [_page([_feed_row(1, "2026-09-29T12:00:00Z"), bad])])
+
+    def test_a_repeat_across_pages_stops_too(self, monkeypatch):
+        pages = [_page([_feed_row(1, "2026-09-29T12:00:00Z")], more=True),
+                 _page([_feed_row(1, "2026-09-29T12:00:00Z")], offset=1)]
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, pages)
+
+    def test_a_feed_that_predates_date_filtering_is_named(self, monkeypatch):
+        with pytest.raises(SystemExit):
+            self._run(monkeypatch, [{"data": [_feed_row(1, "2026-09-29T12:00:00Z")], "has_more": False}])
 
 
 class TestDigestDay:
     def test_a_day_renders_time_summary_and_link(self, monkeypatch, capsys):
         monkeypatch.delenv("NEWS_SITE", raising=False)
         monkeypatch.setattr(ad, "_read_day_from_feed", lambda day, tz, c: {
-            "data": [_feed_row(7, "2026-09-29T12:00:00Z")], "scanned": 50, "complete": True,
-            "reached": "2026-09-20T00:00:00+00:00"})
+            "data": [_feed_row(7, "2026-09-29T12:00:00Z")], "pages": 1, "complete": True})
         monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
         ad.cmd_digest(_Args(date="2026-09-29", tz="UTC"))
         out = capsys.readouterr().out
         assert "1 story" in out and "12:00  **Story 7**" in out and "Summary 7." in out
         assert "https://alaskanews.com/c/alaska-news/story-7" in out
-        assert "public feed, no key: 50 stories scanned" in out and "TERMS" in out
+        assert "public feed, no key" in out and "TERMS" in out
 
-    def test_an_empty_day_says_so_and_an_incomplete_scan_admits_it(self, monkeypatch, capsys):
+    def test_without_tz_the_zone_is_asked_of_the_newsroom(self, monkeypatch, capsys):
+        asked = []
+        monkeypatch.setattr(ad, "_feed_zone", lambda c: asked.append(c) or None)
+        monkeypatch.setattr(ad, "_read_day_from_feed", lambda day, tz, c: {"data": [], "pages": 1, "complete": True})
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
+        ad.cmd_digest(_Args(date="2026-09-29", tz=None))
+        out = capsys.readouterr().out
+        assert asked == ["alaska-news"] and "Days are counted in UTC" in out
+
+    def test_an_empty_day_says_so_and_a_capped_read_admits_it(self, monkeypatch, capsys):
         monkeypatch.setattr(ad, "_read_day_from_feed", lambda day, tz, c: {
-            "data": [], "scanned": 4000, "complete": False, "reached": None})
+            "data": [], "pages": 20, "complete": False})
         monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
         ad.cmd_digest(_Args(date="2026-06-15", tz="UTC"))
         out = capsys.readouterr().out
-        assert "No stories published on 2026-06-15 in what was scanned" in out
-        assert "may be missing" in out
+        assert "No stories published on 2026-06-15" in out and "may be missing" in out
 
     def test_without_a_date_digest_is_unchanged(self, monkeypatch, capsys):
         monkeypatch.setattr(ad, "fetch_markdown", lambda url, timeout=30: "# Homepage")
