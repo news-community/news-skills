@@ -6,6 +6,19 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.3.1 - 2026-09-30
+
+### Security
+
+- **A project folder's `.env` can no longer choose where your key is sent.** The client reads
+  `.env` files from the directory it runs in, which is whatever project the skill is used inside.
+  Such a file could set `NEWS_SITE` or `PLATFORM_API_BASE`, so an agent working in an untrusted
+  repository would send an exported `NEWS_DESK_API_KEY` to that repository's host. Reproduced
+  against 1.3.0: a local collector received the bearer token. A current-directory `.env` may now
+  set only the key and `NEWS_COMMUNITY`; destination settings in it are ignored and named on
+  stderr, and a `.env` next to `news_desk.py` or your real environment still sets them. Found by
+  ClawHub's security scan of 1.3.0, which rated the skill suspicious for exactly this.
+
 ## 1.3.0 - 2026-09-29
 
 Readiness for skill registries, and one mode moved off an endpoint the platform has retired.

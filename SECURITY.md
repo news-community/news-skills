@@ -27,17 +27,25 @@ None is a vulnerability. All three are the kind of thing you should be told rath
 the API base is derived from it; `PLATFORM_API_BASE` overrides that base outright, which exists so
 the tool can be pointed at a platform running locally. Anything that can set either in your
 environment can make the client send your `Authorization: Bearer` header to a host of its choosing.
-If you did not set them, do not let anything else set them, and be wary of a shell profile or a
-`.env` you did not write. `check` prints the newsroom it is actually pointed at, on the first line,
+If you did not set them, do not let anything else set them, and be wary of a shell profile you did
+not write. A `.env` in the directory you run from **cannot** set either one (since 1.3.1; see
+below). `check` prints the newsroom it is actually pointed at, on the first line,
 for exactly this reason. The key goes only where it buys something: `digest`, `topics` and `tags`
 read public endpoints and send no `Authorization` header even when a key is set.
 
 **It reads `.env` and `.env.local` from the current directory**, not only from beside the script, so
 that the key is found whether you run from the project root or the script's folder. Values are
 loaded without overriding anything already in your environment, and the only secret it ever
-transmits is `NEWS_DESK_API_KEY` (or the legacy `ALASKA_DESK_API_KEY`). Still: running it inside an
-unrelated project loads that project's `.env` into the process. If that matters to you, export the
-key instead and keep no `.env` nearby.
+transmits is `NEWS_DESK_API_KEY` (or the legacy `ALASKA_DESK_API_KEY`).
+
+**A current-directory `.env` may set the key and `NEWS_COMMUNITY`, and nothing else.** That
+directory is whatever project the skill happens to run in, so its `.env` is not yours: until 1.3.1
+it could set `NEWS_SITE` or `PLATFORM_API_BASE` and so choose where an exported key was sent, which
+put the key of anyone running an agent inside an untrusted repository one file away from a
+stranger's server. Reproduced against 1.3.0 with a local collector, which received the bearer
+token; 1.3.1 ignores both settings from that file, says so on stderr, and sends nothing there.
+Destinations now come only from your real environment or from a `.env` next to `news_desk.py`.
+Found by ClawHub's security scan of 1.3.0.
 
 **It fetches each newsroom's usage terms over the network.** Before printing the terms line, the
 client reads `<newsroom>/robots.txt` and, failing that, `<newsroom>/llms.txt`. That is one extra

@@ -87,7 +87,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "news-desk/1.3.0"
+UA = "news-desk/1.3.1"
 
 
 def site():
@@ -233,13 +233,27 @@ class ApiError(Exception):
         super().__init__(f"HTTP {code}: {body[:300]}")
 
 
+# What a .env in the CURRENT DIRECTORY may set. That directory is whatever project
+# the skill happens to run in, so its .env is workspace-controlled: if it could set
+# NEWS_SITE or PLATFORM_API_BASE it could choose where your key is sent, and an agent
+# working inside an untrusted repository would carry your exported key there. It may
+# supply the key and the community, never a destination. Destinations come from your
+# real environment or from a .env next to this script, both of which you control.
+# Flagged by ClawHub's security scan of 1.3.0 on 2026-09-29, and correctly.
+CWD_ENV_ALLOWED = frozenset({KEY_ENV, LEGACY_KEY_ENV, "NEWS_COMMUNITY"})
+_IGNORED_NOTICES = set()  # _load_env runs more than once per command; say it once
+
+
 def _load_env():
     """Read KEY=VALUE lines from .env / .env.local next to this script OR in the
     current directory, without overriding anything already set in the environment.
     Checking both means the key file is found whether you run from the script's
-    folder or from your project root."""
+    folder or from your project root. A current-directory file is restricted to
+    CWD_ENV_ALLOWED, and anything else it tries to set is named on stderr."""
     seen = set()
+    script_dir = SCRIPT_DIR.resolve()
     for d in (SCRIPT_DIR, Path.cwd()):
+        workspace = d.resolve() != script_dir
         for name in (".env", ".env.local"):
             p = (d / name).resolve()
             if p in seen or not p.exists():
@@ -263,7 +277,15 @@ def _load_env():
                     v = v[1:-1]
                 else:
                     v = v.split(" #", 1)[0].split("\t#", 1)[0].strip()
-                os.environ.setdefault(k.strip(), v)
+                k = k.strip()
+                if workspace and k not in CWD_ENV_ALLOWED:
+                    if k in ("NEWS_SITE", "PLATFORM_API_BASE") and (p, k) not in _IGNORED_NOTICES:
+                        _IGNORED_NOTICES.add((p, k))
+                        print(f"Ignored {k} from {p}: a project's .env can supply your key but "
+                              "not choose where it is sent. Export it, or put it in a .env "
+                              "next to news_desk.py.", file=sys.stderr)
+                    continue
+                os.environ.setdefault(k, v)
 
 
 def get_api_key():

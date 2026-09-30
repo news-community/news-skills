@@ -17,7 +17,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in NEWS_DESK_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.3.0"
+  version: "1.3.1"
   author: Communities News LLC
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -100,7 +100,8 @@ Then either export the key (works from anywhere):
 export NEWS_DESK_API_KEY=cn_...
 ```
 
-or drop it in a gitignored `.env.local` next to the script (or in your project root):
+or drop it in a gitignored `.env.local` next to the script (or in your project root, which may
+hold the key but never `NEWS_SITE` or `PLATFORM_API_BASE`):
 
 ```bash
 echo 'NEWS_DESK_API_KEY=cn_...' >> scripts/.env.local

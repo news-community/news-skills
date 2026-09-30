@@ -1276,7 +1276,65 @@ class TestCheckReportsWhatHappened:
         assert "search" in blob and "events" in blob
 
 
+class TestWorkspaceEnvCannotRedirectTheKey:
+    """A .env in the current directory belongs to whatever project the skill runs
+    in. If it could set NEWS_SITE or PLATFORM_API_BASE it could choose where the
+    user's key is sent, so an agent working in an untrusted repository would carry
+    an exported key to that repository's host. ClawHub's scan of 1.3.0 flagged it."""
+
+    DESTINATIONS = ("NEWS_SITE", "PLATFORM_API_BASE")
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        skill, project = tmp_path / "skill", tmp_path / "project"
+        skill.mkdir(), project.mkdir()
+        monkeypatch.setattr(ad, "SCRIPT_DIR", skill)
+        monkeypatch.setattr(ad, "_IGNORED_NOTICES", set())
+        monkeypatch.chdir(project)
+        for k in self.DESTINATIONS + (ad.KEY_ENV, ad.LEGACY_KEY_ENV, "NEWS_COMMUNITY"):
+            monkeypatch.delenv(k, raising=False)
+        self.skill, self.project = skill, project
+
+    def test_a_project_env_cannot_set_a_destination(self, capsys):
+        (self.project / ".env").write_text(
+            "PLATFORM_API_BASE=https://collector.example/api/v1\nNEWS_SITE=https://collector.example\n")
+        ad._load_env()
+        import os
+        assert "PLATFORM_API_BASE" not in os.environ and "NEWS_SITE" not in os.environ
+        assert ad.api_base() == "https://alaskanews.com/api/v1"
+        err = capsys.readouterr().err
+        assert "Ignored PLATFORM_API_BASE" in err and "Ignored NEWS_SITE" in err
+
+    def test_a_project_env_may_still_supply_the_key_and_community(self):
+        (self.project / ".env.local").write_text(f"{ad.KEY_ENV}=cn_projectkey\nNEWS_COMMUNITY=elsewhere\n")
+        ad._load_env()
+        assert ad.read_key() == "cn_projectkey" and ad.default_community() == "elsewhere"
+
+    def test_the_skills_own_env_may_set_a_destination(self):
+        (self.skill / ".env").write_text("NEWS_SITE=https://another-newsroom.example\n")
+        ad._load_env()
+        assert ad.site() == "https://another-newsroom.example"
+
+    def test_the_real_environment_still_decides(self, monkeypatch):
+        monkeypatch.setenv("PLATFORM_API_BASE", "http://localhost:3200/api/v1")
+        (self.project / ".env").write_text("PLATFORM_API_BASE=https://collector.example/api/v1\n")
+        ad._load_env()
+        assert ad.api_base() == "http://localhost:3200/api/v1"
+
+    def test_the_notice_is_said_once(self, capsys):
+        (self.project / ".env").write_text("NEWS_SITE=https://collector.example\n")
+        ad._load_env(), ad._load_env(), ad._load_env()
+        assert capsys.readouterr().err.count("Ignored NEWS_SITE") == 1
+
+
 class TestEnvParsing:
+    @pytest.fixture(autouse=True)
+    def _file_is_the_skills_own(self, tmp_path, monkeypatch):
+        """These test PARSING, so the file is treated as the skill folder's own
+        .env, which may set anything. A project folder's .env is restricted;
+        TestWorkspaceEnvCannotRedirectTheKey covers that."""
+        monkeypatch.setattr(ad, "SCRIPT_DIR", tmp_path)
+
     def _write(self, tmp_path, text):
         (tmp_path / ".env.local").write_text(text, encoding="utf-8")
         return tmp_path
