@@ -26,7 +26,8 @@ fetched at run time rather than compiled in, so the tool cannot print one newsro
 over another's reporting.
 
 Everything here is **read-only**. It consumes the public API; it does not submit, edit, or
-write back to the platform.
+write back to the platform. On your own machine it writes one file, and only when you ask:
+`brief --out FILE` saves a brief, replacing a file already at that path.
 
 | Skill | What it does |
 |-------|--------------|

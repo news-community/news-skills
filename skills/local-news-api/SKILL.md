@@ -8,7 +8,7 @@ description: >-
   Reads published articles, meeting transcripts with speakers and timestamps, upcoming civic
   events, a people directory, beats and traceable prior-coverage citations from a Communities
   News newsroom's public API, for example Alaska News at alaskanews.com (the default).
-  Read-only: it never writes back. Reach for it
+  Read-only: it never writes back, and saves a local file only when asked. Reach for it
   even when the request never says "API" or names the newsroom, as in "has anyone reported on
   this", "when does the assembly next meet", "what did the mayor say about the port", "find
   me what was written before", "what ran yesterday", or "brief me before I write about the port".
@@ -19,7 +19,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.6.0"
+  version: "1.6.1"
   author: Communities News LLC
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -57,6 +57,7 @@ part of this tool.
 |---|---|
 | **Audience** | community journalists, bloggers, civic writers; one key each |
 | **Direction** | READ ONLY. No `PATCH` / `PUT` / `DELETE`; its only `POST` is the read-only RAG query. A test enforces this. |
+| **Local files** | none unless you ask: `brief --out FILE` saves the brief as Markdown at the path you give, **replacing** a file already there. Nothing else writes to disk. A test enforces this too. |
 | **Auth** | **your own** `cn_` API key (`COMMUNITIES_NEWS_API_KEY`), ideally created **read-only**. `digest`, `topics` and `tags` need none. |
 | **Output** | rendered markdown by default (paste into your draft), `--json` for raw. Every response carries the site's usage terms. |
 | **Newsroom** | alaskanews.com (`/api/v1`) by default, a DEFAULT not a limit: `NEWS_SITE` + `NEWS_COMMUNITY` point it elsewhere. |
@@ -200,7 +201,8 @@ exactly that day, so no key. The day is the newsroom's own, in the time zone the
 your key reaches, in a writer's order (prior coverage, the meeting record, people on the record,
 events, beats), then four blanks to fill first: why it matters, whose voice is missing, what you will
 cite, and a premise check. Assembled, not generated: no model call, and the judgment is yours.
-`--out brief.md` also saves it, with the terms.
+`--out brief.md` also saves it, with the terms, at that path on your machine, replacing a file
+already there. It is the only file this skill writes.
 
 ## Pointing it at another newsroom
 

@@ -88,7 +88,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.6.0"
+UA = "local-news-api/1.6.1"
 
 
 def site():
@@ -1930,7 +1930,8 @@ def main():
     p.add_argument("topic", help="what the piece is about, in the words you would search")
     _add_date_range(p)
     p.add_argument("--limit", type=int, default=5, help="entries per section (default 5)")
-    p.add_argument("--out", metavar="FILE", help="also write the brief to this local Markdown file")
+    p.add_argument("--out", metavar="FILE",
+                   help="also write the brief to this local Markdown file (replaces one already there)")
 
     p = sub.add_parser("people", parents=[common], help="Who-axis directory: named speakers")
     p.add_argument("query", nargs="?", default="", help="substring match on the name")

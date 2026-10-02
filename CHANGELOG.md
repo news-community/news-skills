@@ -6,6 +6,20 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.6.1 - 2026-10-02
+
+### Changed
+
+- **The one local write is declared.** "Read-only" was always about the newsroom: the client never
+  writes to the platform. But `brief --out FILE` writes a Markdown file on your machine, replacing one
+  already at that path, and the skill never said so beside the read-only claim. One of ClawHub's
+  three scanners (SkillSpector) rated 1.6.0 "do not install" partly on that mismatch. `SKILL.md` now
+  says it in the description, in a **Local files** row, and where `brief` is explained; the README
+  and `--out`'s own help say it too. Behaviour is unchanged.
+- **A test keeps it true.** It reads the client's source for every call that writes to disk, finds
+  exactly one (in `brief`), and first proves it can find a planted write. Two more check that the
+  row is there and that `--out` replaces an existing file, as documented.
+
 ## 1.6.0 - 2026-09-30
 
 ### Changed

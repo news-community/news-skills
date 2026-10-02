@@ -135,6 +135,67 @@ class TestReadOnlyContract:
         posts = re.findall(r'api_request\(\s*"POST"\s*,\s*"([^"]+)"', src)
         assert set(posts) <= {"/rag/query"}, f"unexpected POST target(s): {posts}"
 
+    # Calls that change the local filesystem. Names that are also str or list
+    # methods (replace, remove, rename) count only when called on os.
+    _PATH_WRITES = {"write_text", "write_bytes", "mkdir", "touch", "unlink", "rmdir",
+                    "symlink_to", "hardlink_to"}
+    _OS_WRITES = {"remove", "unlink", "rename", "replace", "makedirs", "mkdir", "rmdir",
+                  "open", "write", "symlink", "link", "truncate"}
+    _SHUTIL_WRITES = {"copy", "copy2", "copyfile", "copytree", "move", "rmtree", "make_archive"}
+
+    @classmethod
+    def _local_writes(cls, src):
+        """(enclosing function, line) for every call in src that writes to disk."""
+        import ast
+
+        def mode_writes(call, pos):
+            mode = call.args[pos] if len(call.args) > pos else next(
+                (k.value for k in call.keywords if k.arg == "mode"), None)
+            return (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
+                    and any(c in mode.value for c in "wax+"))
+
+        def is_write(call):
+            f = call.func
+            if isinstance(f, ast.Name):
+                return f.id == "open" and mode_writes(call, 1)
+            if not isinstance(f, ast.Attribute):
+                return False
+            if f.attr in cls._PATH_WRITES:
+                return True
+            if f.attr == "open" and mode_writes(call, 0):  # Path(p).open("w")
+                return True
+            owner = f.value.id if isinstance(f.value, ast.Name) else None
+            return ((owner == "os" and f.attr in cls._OS_WRITES)
+                    or (owner == "shutil" and f.attr in cls._SHUTIL_WRITES))
+
+        found = []
+
+        def visit(node, fn):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    visit(child, child.name)
+                    continue
+                if isinstance(child, ast.Call) and is_write(child):
+                    found.append((fn, child.lineno))
+                visit(child, fn)
+
+        visit(ast.parse(src), "<module>")
+        return found
+
+    def test_the_only_local_write_is_brief_out(self):
+        """SKILL.md says nothing writes to disk except `brief --out`. A registry
+        scanner (SkillSpector, 2026-09-30) read "read-only" as covering the local
+        machine too and called --out a capability mismatch, so the write is now
+        declared, and this keeps the declaration true. The detector is shown able
+        to fire first: a check that cannot find a planted write proves nothing."""
+        planted = ("def leak(p):\n    open(p, 'w').write('x')\n"
+                   "def stash(p):\n    Path(p).write_bytes(b'')\n"
+                   "def swap(a, b):\n    os.replace(a, b)\n")
+        assert [fn for fn, _ in self._local_writes(planted)] == ["leak", "stash", "swap"]
+        assert not self._local_writes("s = 'a'.replace('a', 'b')\nopen(p)\nopen(p, 'r')\n")
+        writes = self._local_writes(Path(SCRIPT).read_text())
+        assert [fn for fn, _ in writes] == ["cmd_brief"], f"local writes outside brief --out: {writes}"
+
 
 class TestAnglesDiscovery:
     """`angles` scaffolds the 5-Ws DISCOVERY mode (fix two Ws, expand the rest).
@@ -1061,6 +1122,13 @@ class TestSkillMdMatchesTheCode:
         missing = self._registered_modes() - self._documented_modes()
         assert not missing, f"modes the CLI has and the Modes block omits: {sorted(missing)}"
 
+    def test_the_local_write_is_declared(self):
+        """The read-only claim is about the newsroom. The one local write has to be named
+        beside it, or the claim over-promises to whoever decides to install."""
+        row = next((line for line in SKILL_MD.read_text().splitlines()
+                    if line.startswith("| **Local files** |")), "")
+        assert "brief --out" in row, "SKILL.md's table must declare the brief --out write"
+
     def test_every_documented_mode_exists(self):
         """The other direction: a mode removed from the code but left in the
         docs sends a reader to a command that errors."""
@@ -1872,6 +1940,13 @@ class TestBrief:
         text = target.read_text(encoding="utf-8")
         assert text.startswith("# Research brief: port of alaska") and "TERMS" in text
         assert f"Written to {target}" in out and len(calls) == 1
+
+    def test_out_replaces_a_file_already_there(self, monkeypatch, capsys, tmp_path):
+        """SKILL.md says so, because a reader choosing a path needs to know."""
+        target = tmp_path / "brief.md"
+        target.write_text("an earlier draft\n", encoding="utf-8")
+        self._run(monkeypatch, capsys, out=str(target))
+        assert "an earlier draft" not in target.read_text(encoding="utf-8")
 
 
 if __name__ == "__main__":
