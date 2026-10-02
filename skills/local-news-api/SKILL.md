@@ -19,7 +19,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.6.1"
+  version: "1.6.2"
   author: Communities News LLC
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -217,8 +217,8 @@ export COMMUNITIES_NEWS_API_KEY=cn_...   # (NEWS_DESK_API_KEY, ALASKA_DESK_API_K
 
 **alaskanews.com remains the default**, and today it is the only newsroom live on this platform, so
 that default is also the whole of production. Nothing about a market is compiled in: the terms, the
-`See also` links, the reachability report and every request path follow whatever `NEWS_SITE` and
-`--community` say. `check` prints which newsroom and community it is reporting on, because a
+`See also` links, the reachability report, every request path and every "create a key here" message
+follow whatever `NEWS_SITE` and `--community` say. `check` prints which newsroom and community it is reporting on, because a
 reachability report that does not name its subject is the kind of thing you read wrongly once.
 
 **Paging.** Every list mode takes `--limit` and `--offset`, and prints `showing 1-20 of 340` with the

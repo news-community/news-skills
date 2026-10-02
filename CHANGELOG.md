@@ -6,6 +6,20 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.6.2 - 2026-10-02
+
+### Fixed
+
+- **Recovery messages name the newsroom you configured, not Alaska News.** With `NEWS_SITE`
+  pointing elsewhere, the no-key message, both 401 recoveries, the not-read-only note in `check`, the
+  non-JSON recovery and `--help` still sent the reader to `alaskanews.com/profile/settings` or called
+  the key an "alaskanews API key". They now use the configured host. ClawHub's scanners reported it
+  (SkillSpector SQP-3, and ClawScan's one unexpected finding on 1.6.0).
+- **A test keeps it fixed.** It reads every string literal in the client, docstrings aside, and
+  allows Alaska only in the three default constants; it first proves it catches a planted message.
+  A second sets `NEWS_SITE` to another host and checks each message names that host's own key page.
+  Both failed against 1.6.1.
+
 ## 1.6.1 - 2026-10-02
 
 ### Changed

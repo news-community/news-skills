@@ -878,6 +878,64 @@ class TestNewsroomAgnostic:
         monkeypatch.setenv("NEWS_SITE", "https://example.news")
         assert "example.news" in ad.see_also() and "alaskanews" not in ad.see_also()
 
+    @staticmethod
+    def _alaska_strings(src):
+        """String literals mentioning Alaska, docstrings excepted."""
+        import ast
+        tree = ast.parse(src)
+        docstrings = {id(n.body[0].value) for n in ast.walk(tree)
+                      if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                      and n.body and isinstance(n.body[0], ast.Expr)
+                      and isinstance(n.body[0].value, ast.Constant)}
+        return [n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and "alaska" in n.value.lower() and id(n) not in docstrings]
+
+    def test_only_the_defaults_name_alaska(self):
+        """A key-creation or 401 message that names alaskanews.com sends a reader
+        of another newsroom to the wrong site. A registry scanner found five such
+        strings in 1.6.0 (SkillSpector SQP-3). Only the configuration constants
+        may name the default newsroom; everything a reader sees derives from
+        NEWS_SITE. Shown able to fire first, on a planted message."""
+        planted = 'def f():\n    """Alaska is fine in a docstring."""\n    print("Get a key at alaskanews.com")\n'
+        assert self._alaska_strings(planted) == ["Get a key at alaskanews.com"]
+        allowed = {ad.DEFAULT_SITE, ad.DEFAULT_COMMUNITY, ad.OLDEST_KEY_ENV}
+        stray = [s for s in self._alaska_strings(Path(SCRIPT).read_text()) if s not in allowed]
+        assert not stray, f"reader-facing strings that name Alaska: {stray}"
+
+    def test_recovery_messages_send_the_reader_to_the_configured_newsroom(self, monkeypatch, capsys):
+        """The other half: removing the Alaska URL must not leave the reader with
+        no URL at all. Each message names the configured newsroom's own page."""
+        monkeypatch.setenv("NEWS_SITE", "https://example.news")
+        monkeypatch.setattr(ad, "_load_env", lambda: None)
+        for env in (ad.KEY_ENV, ad.LEGACY_KEY_ENV, ad.OLDEST_KEY_ENV):
+            monkeypatch.setenv(env, "")
+        want = "example.news/profile/settings"
+
+        with pytest.raises(SystemExit):
+            ad.get_api_key()
+        err = capsys.readouterr().err
+        assert want in err and "alaska" not in err.lower()
+
+        def fail(code):
+            def raise_():
+                raise ad.ApiError(code, "x")
+            return raise_
+        for key, code, expect in (("msk_wrongservice", 401, want), ("cn_" + "0" * 40, 401, want),
+                                  ("cn_" + "0" * 40, ad.NON_JSON, "example.news")):
+            monkeypatch.setenv(ad.KEY_ENV, key)
+            with pytest.raises(SystemExit) as e:
+                ad._guided(fail(code))
+            msg = str(e.value.code)
+            assert expect in msg and "alaska" not in msg.lower(), (code, key[:4], msg)
+
+        lines = "\n".join(ad.render_reachability({"read_only": False}))
+        assert want in lines and "alaska" not in lines.lower()
+
+    def test_help_names_the_configured_newsroom(self):
+        r = run("--help", env={"NEWS_SITE": "https://example.news"})
+        assert "example.news" in r.stdout and "alaska" not in r.stdout.lower()
+
 
 class TestTermsAreReadNotAsserted:
     """The terms line is printed under someone else's reporting, and the

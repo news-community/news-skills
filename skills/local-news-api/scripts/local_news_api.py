@@ -88,7 +88,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.6.1"
+UA = "local-news-api/1.6.2"
 
 
 def site():
@@ -98,6 +98,18 @@ def site():
 
 def default_community():
     return os.environ.get("NEWS_COMMUNITY", DEFAULT_COMMUNITY)
+
+
+def site_host():
+    """The configured newsroom's host, for the messages a reader acts on."""
+    return urllib.parse.urlparse(site()).netloc or site()
+
+
+def key_settings_url():
+    """Where a reader creates a key: the same account page at every newsroom on
+    the platform. These messages named alaskanews.com until 1.6.2, which sent a
+    reader of any other newsroom to the wrong site."""
+    return f"{site_host()}/profile/settings"
 
 
 # The key is a Communities News platform key (cn_ is its prefix), so that is its
@@ -300,7 +312,7 @@ def get_api_key():
     key = read_key()
     if not key:
         print(f"Error: {KEY_ENV} not set.", file=sys.stderr)
-        print("Create a key at alaskanews.com/profile/settings, then set it:", file=sys.stderr)
+        print(f"Create a key at {key_settings_url()}, then set it:", file=sys.stderr)
         print(f"  export {KEY_ENV}=cn_...", file=sys.stderr)
         print(f"  # or: echo '{KEY_ENV}=cn_...' >> .env.local  (next to this script)", file=sys.stderr)
         sys.exit(2)
@@ -695,16 +707,16 @@ def _guided(fn):
             key = read_key()
             if key and not key.startswith("cn_"):
                 sys.exit(
-                    f"Not authorized (401). Your key starts with {key[:4]!r}, but alaskanews API "
+                    f"Not authorized (401). Your key starts with {key[:4]!r}, but Communities News API "
                     "keys start with 'cn_' (cn_ + 40 hex).\n"
-                    "  That looks like a key for a different service. Recovery: create an alaskanews "
-                    "key at alaskanews.com/profile/settings and put it in a .env.local next to this script."
+                    "  That looks like a key for a different service. Recovery: create a key at "
+                    f"{key_settings_url()} and put it in a .env.local next to this script."
                 )
             sys.exit(
-                "Not authorized (401). This mode needs your alaskanews API key (starts with 'cn_').\n"
+                f"Not authorized (401). This mode needs your API key for {site_host()} (starts with 'cn_').\n"
                 f"  Recovery: echo '{KEY_ENV}=cn_...' >> .env.local\n"
                 "  Then: python3 local_news_api.py check\n"
-                "  Get a key at alaskanews.com/profile/settings."
+                f"  Get a key at {key_settings_url()}."
             )
         if e.code == 403:
             sys.exit(
@@ -733,7 +745,7 @@ def _guided(fn):
             sys.exit(
                 f"Unexpected non-JSON response ({e.body}).\n"
                 "  Why: usually a proxy or captive portal answering instead of the API.\n"
-                "  Recovery: confirm you can reach alaskanews.com, then re-run `check`."
+                f"  Recovery: confirm you can reach {site_host()}, then re-run `check`."
             )
         if e.code == 429:
             sys.exit("Rate limited (429). Recovery: back off ~a minute; the API allows 300 reads/min per user.")
@@ -1760,7 +1772,7 @@ def render_reachability(reach):
     elif ro is False:
         out.append("  key is NOT read-only: it can write. Nothing here writes, but a "
                    "read-only key would make that a server guarantee instead of a promise. "
-                   "Create one at alaskanews.com/profile/settings (rag would then be refused).")
+                   f"Create one at {key_settings_url()} (rag would then be refused).")
 
     for c in reach.get("communities") or []:
         if isinstance(c, dict):
@@ -1896,7 +1908,8 @@ def main():
                         help=f"Community slug (default {default_community()})")
 
     ap = argparse.ArgumentParser(
-        description="Read-only research client for the alaskanews.com public API (external consumers).",
+        description=f"Read-only research client for the {site_host()} public API "
+                    "(external consumers; NEWS_SITE picks the newsroom).",
         epilog=f"Every mode ends with Next steps (HATEOAS). Related modes: {RELATED_MODES}.")
     sub = ap.add_subparsers(dest="mode", required=True)
 
