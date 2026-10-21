@@ -20,7 +20,7 @@ compatibility: >-
 allowed-tools: Bash
 metadata:
   version: "1.6.2"
-  author: Communities News LLC
+  author: Communities News, Inc.
   homepage: https://communities.news
   repository: news-community/news-skills
   openclaw: {"primaryEnv": "COMMUNITIES_NEWS_API_KEY", "requires": {"bins": ["python3"]},
