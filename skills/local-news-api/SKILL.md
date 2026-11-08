@@ -19,7 +19,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.6.2"
+  version: "1.6.3"
   author: Communities News, Inc.
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -119,11 +119,11 @@ Access is tiered on the platform side, and your key may not reach everything.
 | Mode | Reach | Note |
 |---|---|---|
 | `digest` | **public** | recent stories; `--date` for one day's, a summary each. Verified 2026-09-30 |
-| `search` | **any valid key** | six corpora; `external_documents` and `social_post` are editor/admin only |
+| `search` | **any valid key** | `transcripts` needs a subscriber's key; `external_documents` and `social_post` are editor/admin only |
 | `angles` | **any valid key** | discovery scaffold; runs on the `/search` surface |
 | `brief` | **any valid key** | research brief: one `/search`, arranged for a writer, then four blanks |
 | `article` | **public by URL/slug**, keyed by id | the id form returns the richer record |
-| `transcript` | **any valid key** | full meeting transcript with speakers + timestamps |
+| `transcript` | **any valid key** | one full meeting transcript with speakers + timestamps |
 | `events` | **any valid key** | `GET /calendar`, date-ranged. Re-verified 2026-09-09 |
 | `communities` | **any valid key** | the slugs `--community` accepts |
 | `browse` | **any valid key** | the published article list; `--tag` for one beat |
@@ -144,7 +144,8 @@ request) apart from `requires_role` (a membership you could be granted). Those e
 **403** with `error: session_auth_only` and a remedy, not a bare 401 that reads like a bad key.
 
 Use `search --corpus transcripts` instead of `transcripts/search`, and get clip ids from `search` or
-an article.
+an article. **Searching transcripts needs a subscriber's key**; otherwise output says `Not searched:
+transcripts`, never "nothing found".
 
 **How much weight these rows carry.** They come from two passes with two different keys, and only
 one of them tells you about external reach. Read
@@ -304,7 +305,7 @@ phrase with no matching published story behind it.
 - **You cannot browse clips or use `/transcripts/search` with any key.** Both are cookie-session
   endpoints, not role gates. See the auth section above.
 - **`angles` and `brief`** each make one `/search` call, so any key that reaches `search` reaches
-  them. `angles`' suggested `rag` follow-ups inherit rag's role limit.
+  them (transcripts as above). `angles`' suggested `rag` follow-ups inherit rag's role limit.
 - **Rate limits.** 300 reads/min per user (and 180 writes/min, which nothing here uses). A 429 is a
   back-off, not a permission problem.
 - **This is not a submission tool.** If you want your work published *on* the newsroom, that is a

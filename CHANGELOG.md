@@ -6,6 +6,23 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.6.3 - 2026-11-08
+
+### Changed
+
+- **Searching transcripts needs a subscriber's key.** The newsroom now treats searching across
+  every meeting transcript as part of a subscription, the way its website does. With any other key
+  the server skips the `transcripts` corpus: asked for alone it answers 403, and asked for with
+  other corpora (as `angles --intent precedent`, `track` and `local` do) or left in the default
+  set it is skipped and named in the response. Reading one transcript with `transcript <id>` is
+  unchanged and needs no subscription.
+
+### Fixed
+
+- **A skipped corpus says so.** `search`, `angles` and `brief` print `Not searched: transcripts`
+  with the server's reason, and `brief` heads that section "(not searched)" instead of "nothing
+  found", which would read as "no coverage exists". Tests cover all three and fail against 1.6.2.
+
 ## 1.6.2 - 2026-10-02
 
 ### Fixed

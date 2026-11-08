@@ -88,7 +88,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.6.2"
+UA = "local-news-api/1.6.3"
 
 
 def site():
@@ -446,6 +446,27 @@ def api_redirect(path, timeout=30):
 CORPORA = ("articles", "users", "tags", "transcripts", "speakers", "events",
            "external_documents", "social_post")
 RESTRICTED_CORPORA = frozenset({"external_documents", "social_post"})
+# Searching across every transcript needs a subscriber's key (or an editor or
+# admin role) since 2026-11-08. Asked for alone it is a 403; asked for with other
+# corpora, or left in the default set, the server skips it and names it in
+# meta.refused, which every search-shaped mode prints. Reading one transcript
+# (`transcript <id>`) needs no subscription.
+SUBSCRIBER_CORPORA = frozenset({"transcripts"})
+
+
+def _refused(resp):
+    """{corpus: reason} for the corpora the server skipped for this key (meta.refused).
+    A skipped corpus must never print as "nothing found": that reads as "no coverage"."""
+    meta = resp.get("meta") if isinstance(resp, dict) else None
+    out = {}
+    for r in (meta or {}).get("refused") or []:
+        if isinstance(r, dict) and r.get("corpus"):
+            out[r["corpus"]] = r.get("message") or r.get("code") or "not searched for this key"
+    return out
+
+
+def _refused_lines(resp):
+    return [f"Not searched: {c}. {why}" for c, why in _refused(resp).items()]
 
 
 def _check_corpora(spec):
@@ -468,6 +489,11 @@ def _check_corpora(spec):
     if gated:
         print(f"Note: {', '.join(gated)} is editor/admin only and will 403 for a consumer key. "
               "Omit --corpus to have it dropped silently instead.", file=sys.stderr)
+    subscriber = [c for c in asked if c in SUBSCRIBER_CORPORA]
+    if subscriber:
+        print("Note: searching transcripts needs a subscriber's key. Without one it is skipped "
+              "(or a 403 when it is the only corpus asked for); `transcript <id>` still reads "
+              "any single transcript.", file=sys.stderr)
 
 
 def _add_paging(p, default_limit):
@@ -722,10 +748,12 @@ def _guided(fn):
             sys.exit(
                 "Forbidden (403). Your key is valid but its role does not permit this.\n"
                 "  Why: the external_documents and social_post search corpora are editor/admin "
-                "only. Asking for them by name is a 403; leaving --corpus off drops them silently "
-                "and returns the rest.\n"
+                "only, and searching transcripts needs a subscriber's key. Asking for one of "
+                "them alone is a 403; with other corpora, or with --corpus off, the server skips "
+                "it and says so.\n"
                 "  Recovery: run `check` to see your reach, and stay on "
-                "articles/transcripts/events/tags/speakers/users, which any valid key reaches."
+                "articles/events/tags/speakers/users, which any valid key reaches. "
+                "`transcript <id>` reads any single transcript."
             )
         if e.code == TIMED_OUT:
             sys.exit(
@@ -1017,7 +1045,11 @@ def _render_brief(resp, args):
            f"> {urllib.parse.urlsplit(site()).netloc or site()}, community `{args.community}`"
            + (f", {window}" if window else "")
            + f". Generated {_dt.datetime.now(_dt.timezone.utc).date().isoformat()} (UTC)."]
+    refused = _refused(resp)
     for corpus, heading, how in BRIEF_SECTIONS:
+        if corpus in refused:
+            out += ["", f"## {heading} (not searched)", f"_{refused[corpus]}_"]
+            continue
         block = data.get(corpus) or {}
         results = block.get("results") or []
         out += ["", f"## {heading} ({block.get('total', len(results))})", f"_{how}_"]
@@ -1172,6 +1204,7 @@ def cmd_search(args):
 
     def render(r):
         out = [f"# search: {args.query!r}  (corpus: {args.corpus or 'all'})"]
+        out += _refused_lines(r)
         out += _render_corpora(r.get("data") if isinstance(r, dict) else None, args.limit)
         return "\n".join(out)
 
@@ -1195,6 +1228,7 @@ def cmd_angles(args):
             f"Intent: {args.intent}  (fix {fixed}; expand {expand})",
             "Held on the fixed axes; the hits below vary the rest. One level only: nest via Next steps.",
         ]
+        out += _refused_lines(r)
         out += _render_corpora(r.get("data") if isinstance(r, dict) else None, args.limit)
         out.append("\nRelevance, not corroboration: a hit is relevant when a SECOND axis agrees, not "
                    "just the topic. That still does not confirm a claim, since several pieces can repeat "

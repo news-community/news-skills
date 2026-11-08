@@ -2009,3 +2009,38 @@ class TestBrief:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+class TestRefusedCorporaAreNamed:
+    """Since 2026-11-08 searching transcripts needs a subscriber's key. The server
+    skips it for other keys and names it in meta.refused; a skipped corpus must
+    never print as "nothing found", which reads as "no coverage exists"."""
+
+    REFUSED = {"corpus": "transcripts", "code": "subscription_required",
+               "message": "Searching across every transcript requires an active subscription."}
+
+    def _search(self, monkeypatch, capsys, meta, fn, **kw):
+        resp = {"data": {"articles": {"total": 1, "results": [{"title": "Port story", "slug": "port"}]},
+                         "transcripts": {"total": 0, "results": []}}, "meta": meta}
+        monkeypatch.setattr(ad, "api_request", lambda m, p, params=None, **k: resp)
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
+        fn(_Args(**kw))
+        return capsys.readouterr().out
+
+    def test_search_names_a_skipped_corpus(self, monkeypatch, capsys):
+        out = self._search(monkeypatch, capsys, {"refused": [self.REFUSED]}, ad.cmd_search, query="port")
+        assert "Not searched: transcripts." in out
+
+    def test_angles_names_a_skipped_corpus(self, monkeypatch, capsys):
+        out = self._search(monkeypatch, capsys, {"refused": [self.REFUSED]}, ad.cmd_angles, seed="port", intent="precedent")
+        assert "Not searched: transcripts." in out
+
+    def test_brief_says_not_searched_rather_than_nothing_found(self, monkeypatch, capsys):
+        out = self._search(monkeypatch, capsys, {"refused": [self.REFUSED]}, ad.cmd_brief, topic="port", out=None)
+        section = out[out.index("## The public record"):].split("\n## ")[0]
+        assert "(not searched)" in section and "nothing found" not in section
+
+    def test_nothing_is_named_when_nothing_was_skipped(self, monkeypatch, capsys):
+        out = self._search(monkeypatch, capsys, {}, ad.cmd_brief, topic="port", out=None)
+        section = out[out.index("## The public record"):].split("\n## ")[0]
+        assert "not searched" not in section and "nothing found" in section
