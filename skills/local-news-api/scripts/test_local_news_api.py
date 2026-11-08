@@ -2044,3 +2044,25 @@ class TestRefusedCorporaAreNamed:
         out = self._search(monkeypatch, capsys, {}, ad.cmd_brief, topic="port", out=None)
         section = out[out.index("## The public record"):].split("\n## ")[0]
         assert "not searched" not in section and "nothing found" in section
+
+
+class TestCheckIgnoresPublicRoutesAsKeyEvidence:
+    """A route that answers without a key says nothing about the key. When
+    /calendar became public, a key every keyed route refused read as
+    "no access (role)" instead of "rejected" (2026-11-08)."""
+
+    def test_a_public_200_does_not_make_a_rejected_key_look_role_gated(self, monkeypatch, capsys):
+        def fake(method, path, params=None, body=None, timeout=60, public=False):
+            if path == "/calendar":
+                return {"data": {"events": []}}
+            raise ad.ApiError(401, "API key required")
+        monkeypatch.setattr(ad, "api_request", fake)
+        monkeypatch.setattr(ad, "fetch_markdown", lambda url, **k: "# home")
+        monkeypatch.setattr(ad, "terms_note", lambda origin=None: "TERMS")
+        monkeypatch.setenv("COMMUNITIES_NEWS_API_KEY", "cn_" + "0" * 40)
+        ad.cmd_check(_Args(json=True))
+        payload = __import__("json").loads(capsys.readouterr().out)
+        assert payload["surfaces"]["calendar (events)"] == "OK (public)"
+        assert payload["surfaces"]["articles"] == "rejected (key not accepted)"
+        assert "no access (role)" not in payload["surfaces"].values()
+

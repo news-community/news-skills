@@ -603,6 +603,8 @@ def _skill_next_steps(mode, args, has_key, state=None) -> list:
             steps.append(('angles "<topic>" --intent similar', "or work a story across the five Ws"))
         if "calendar (events)" in reached:
             steps.append(("events --days 14", "your key reached the calendar; see what is coming up"))
+        elif surfaces.get("calendar (events)") == "OK (public)":
+            steps.append(("events --days 14", "the calendar needs no key; see what is coming up"))
         if not steps:
             steps.append(("digest", "the keyed surfaces did not answer; digest needs no key"))
         return steps[:5]
@@ -1877,7 +1879,15 @@ def cmd_check(args):
             try:
                 api_request(method, path, params=params, body=body, timeout=30)
                 result["surfaces"][label] = "OK"
-                codes.append(200)
+                # A route that also answers WITHOUT a key says nothing about the
+                # key: /calendar became public, and its 200 then made a key that
+                # every keyed route refused read as "role-gated" instead of
+                # "rejected" (2026-11-08). Only a keyed-only 200 counts.
+                try:
+                    api_request(method, path, params=params, body=body, timeout=30, public=True)
+                    result["surfaces"][label] = "OK (public)"
+                except ApiError:
+                    codes.append(200)
             except ApiError as e:
                 codes.append(e.code)
                 result["surfaces"][label] = _STATUS.get(e.code, f"HTTP {e.code}") if e.code != 401 else "401"

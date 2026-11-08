@@ -22,6 +22,11 @@ landed on `main`.
 - **A skipped corpus says so.** `search`, `angles` and `brief` print `Not searched: transcripts`
   with the server's reason, and `brief` heads that section "(not searched)" instead of "nothing
   found", which would read as "no coverage exists". Tests cover all three and fail against 1.6.2.
+- **`check` no longer calls a rejected key role-gated.** The newsroom's calendar now answers
+  without a key, and its 200 made a key that every keyed route refused read as "no access (role)"
+  on each of them, sending you after a role instead of a working key. A route that also answers
+  without a key now shows "OK (public)" and counts as no evidence about the key. This was the
+  suite's one failing test since the calendar changed; an offline test now covers it.
 
 ## 1.6.2 - 2026-10-02
 
