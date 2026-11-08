@@ -15,7 +15,10 @@ permissions:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: on 2026-11-08 ubuntu-latest became 26.04, for
+    # which setup-python has no 3.9, so the job testing the claimed floor
+    # failed to start. 24.04 still carries every version in the matrix.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
