@@ -43,6 +43,30 @@ failing on the previous code first.
   It reads across a line wrap, though still not across a blank line.
 - **`browse --tag` dropped `--sort` and `--window`**, which the tag route accepts.
 
+### Fixed before release (a review of these fixes)
+
+- **`browse --since` was still blind on `/articles`.** That route orders by arrival but does not
+  return it, so the new stop rule never applied there. Every route now stops at the first row that
+  arrived more than 25 hours before the day, reading arrival where it is returned and bounding it
+  by publication where it is not.
+- **`browse --tag --sort popular` or `alphabetical` returned the hot order** under a heading that did
+  not say so. The tag route serves new, timeline, top and hot; anything else is refused, and the
+  heading names the order.
+- **`cite-check` lost the speaker on an abbreviated title**: "said Sen. Lisa Murkowski" read as
+  "Sen", so the speaker check said nothing. A trailing day ("said Jane Doe Wednesday") read as the
+  surname and raised a false warning. Hyphenated surnames, curly apostrophes, accents and suffixes
+  (PhD, MD) no longer read as different people; two different first names under one surname now do.
+- **A draft piped in with CRLF line endings** let a stray quote pair across a paragraph break and
+  sent the text between as a search. Line endings are normalised, and a whitespace-only line counts
+  as blank.
+- **Newsroom text printed outside the fence in `cite-check`**: a refusal's reason, a failed search's
+  body, and an article slug in "Could not read". All are fenced, and a slug not shaped like one is
+  never fetched. **The newsroom's time zone name** could reach `meeting-prep`'s header the same way;
+  the client now ignores a reported zone that is not shaped like one.
+- **The UTC fallback note named the wrong cause** when the machine has no tz database; it now says to
+  install `tzdata`, and a newsroom that reports UTC gets no note.
+- **`--max-quotes 0` or a negative number** was accepted (and -1 silently dropped the last quote).
+
 ### Changed
 
 - **`cite-check` says a match is not a fact check.** Every VERBATIM result now adds that a match

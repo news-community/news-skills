@@ -25,14 +25,17 @@ entry as a date.
 ## `--since` on `browse` and `person`
 
 `/articles`, `/tags/<slug>/articles` and `/persons/<id>/articles` take no date, so `--since` reads them
-newest-first and keeps every story published on or after the day. Those lists are ordered by
-**arrival**, which is publication pulled back by up to 24 hours when a story's source is old, so a
-qualifying story can sit below a whole page of older ones. Paging therefore stops once a page's
-oldest arrival is more than 24 hours before the day, when nothing later can qualify (on a route that
-reports no arrival time, at the first page with nothing new). It stops after 1,000 stories and says so.
+newest-first and keeps every story published on or after the day. `/articles` and the tag route
+are ordered by **arrival**, which is publication pulled back by up to 24 hours when a story's source
+is old, so a qualifying story can sit below a whole page of older ones; `/persons/<id>/articles` is
+ordered by publication. Paging stops at the first row that arrived more than 25 hours before the
+day (24 for the pull-back, one because `/articles` orders by the arrival hour), when nothing later
+can qualify. The tag route returns each story's arrival; the other two do not, and there a story's
+publication bounds it, since arrival is never later. It stops after 1,000 stories and says so.
 The day is counted in the newsroom's own time zone, as `digest --date` counts it; `--tz` overrides.
 `browse --since` needs `--sort new` (the default), since no other order lets it know when to stop.
-`browse --tag` needs no key. The tag route takes no community, so `--community` does not narrow
+`browse --tag` needs no key, and takes `--sort new`, `timeline`, `top` or `hot`, the orders the tag
+route serves (it would serve any other as hot). The tag route takes no community, so `--community` does not narrow
 it: without a key it reads the newsroom at the configured site. `person` sends one for both its calls: the coverage route answers
 without a key only for people with a public page, and a key reaches the rest.
 

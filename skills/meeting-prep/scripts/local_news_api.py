@@ -1040,10 +1040,18 @@ def _utc_iso(ts):
     return ts.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# An IANA zone name ("America/Anchorage", "UTC", "Etc/GMT+9"). The name comes from the
+# newsroom and can be echoed in a note printed outside any fence, so anything else is
+# treated as not reported.
+_ZONE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}")
+
+
 def _feed_zone(community):
-    """The newsroom's time zone as the public feed reports it, or None."""
+    """The newsroom's time zone as the public feed reports it, or None when it reports
+    none or something not shaped like a zone name."""
     resp = api_request("GET", "/feed", {"community": community, "limit": 1}, public=True)
-    return ((resp.get("community") or {}).get("timezone")) if isinstance(resp, dict) else None
+    name = ((resp.get("community") or {}).get("timezone")) if isinstance(resp, dict) else None
+    return name if isinstance(name, str) and len(name) <= 64 and _ZONE_RE.fullmatch(name) else None
 
 
 def _day_zone(explicit, reported):
@@ -1076,10 +1084,11 @@ def _events_zone(args):
             reported = _feed_zone(getattr(args, "community", None) or default_community())
         except ApiError:
             reported = None
-    tz, name, _note = _day_zone(explicit, reported)
-    note = "" if name != "UTC" or explicit else (
-        "Times are in UTC: the newsroom's time zone could not be read. Pass --tz <Area/City>.")
-    return tz, note
+    tz, _name, note = _day_zone(explicit, reported)
+    # _day_zone words its note for counting days, and says which cause applies: no
+    # zone reported, or a reported zone this machine cannot load (no tz database,
+    # where --tz would fail too). The same cause, worded for times.
+    return tz, note.replace("Days are counted in UTC", "Times are in UTC")
 
 
 def _truthy(v):
@@ -2209,6 +2218,9 @@ EVENTS_PAGE = 200
 EVENTS_SCAN_CAP = 1000
 
 SORTS = ("hot", "new", "timeline", "top", "popular", "alphabetical")
+# VERIFIED: the tag route's own orders (platform tagFeedPage); it serves any other
+# sort as hot, so the client refuses the rest rather than mislabel the list.
+TAG_SORTS = ("new", "timeline", "top", "hot")
 TIME_WINDOWS = ("today", "week", "month", "all")
 
 
@@ -2220,6 +2232,9 @@ SINCE_SCAN_CAP = 1000   # CHOSEN: ten pages, far past a beat's week; a guard, an
 # A story published on or after a cutoff therefore arrives no earlier than this
 # much before it. If the platform raises that cap, this must follow it.
 ARRIVAL_DEMOTION_CAP = _dt.timedelta(hours=24)
+# VERIFIED: /articles orders `new` by arrival_hour_bucket, then priority within the
+# hour (platform listPublished), so order is only exact to the hour there.
+ARRIVAL_ORDER_SLACK = _dt.timedelta(hours=1)
 
 
 def _since_start(args):
@@ -2241,10 +2256,15 @@ def _collect_since(fetch, start):
     whose source is old arrives up to ARRIVAL_DEMOTION_CAP before it was published,
     so a whole page of older stories can sit above one that qualifies. Stopping at
     the first page with nothing new (the old rule) skipped it and called the list
-    complete. Paging now stops once a page's oldest arrival is more than the cap
-    before `start`, when nothing after it can qualify; on a route that does not
-    report arrival times it falls back to the old rule. It also stops when the list
-    ends, or after SINCE_SCAN_CAP rows, which is reported.
+    complete. Paging now stops once a page holds a row that arrived more than the
+    cap (plus an hour, for routes that order by the arrival hour) before `start`:
+    nothing after it can qualify. A row's arrival is read from effective_arrival_at
+    where the route returns it (the tag route) and bounded by its publication where
+    it does not (/articles, and /persons/<id>/articles, which orders by publication),
+    because arrival is publication pulled back, never pushed forward (platform
+    article_dating, for every story published since 2026-10-05). A page with neither
+    falls back to the old rule. It also stops when the list ends, or after
+    SINCE_SCAN_CAP rows, which is reported.
     Returns (rows, truncated), or (None, resp) when the shape is not a list."""
     rows, offset = [], 0
     while True:
@@ -2261,10 +2281,11 @@ def _collect_since(fetch, start):
         # (persons/<id>/articles did), and believing it stopped at 100 silently.
         if not page or (resp.get("has_more") is False and len(page) < SINCE_PAGE):
             return rows, False
-        arrivals = [t for t in (_parse_ts(a.get("effective_arrival_at"))
-                                for a in page if isinstance(a, dict)) if t]
-        if arrivals and len(arrivals) == len(page):
-            if min(arrivals) < start - ARRIVAL_DEMOTION_CAP:
+        latest_arrivals = [t for t in (_parse_ts(a.get("effective_arrival_at"))
+                                       or _parse_ts(a.get("published_at"))
+                                       for a in page if isinstance(a, dict)) if t]
+        if latest_arrivals:
+            if min(latest_arrivals) < start - ARRIVAL_DEMOTION_CAP - ARRIVAL_ORDER_SLACK:
                 return rows, False
         elif not fresh:
             return rows, False
@@ -2301,6 +2322,9 @@ def cmd_browse(args):
     if since and args.sort != "new":
         sys.exit(f"--since needs --sort new (the default): it reads newest-first by arrival and stops "
                  f"once arrivals are well past the cutoff, which a {args.sort!r} order cannot promise.")
+    if args.tag and args.sort not in TAG_SORTS:
+        sys.exit(f"--tag takes --sort {', '.join(TAG_SORTS)}, not {args.sort!r}: the tag route "
+                 f"serves any other order as hot.")
     # /tags/<slug>/articles answers without a key (platform: requireAuth false;
     # 200 keyless on 2026-11-19), so it gets none; /articles still needs one.
     public = bool(args.tag)
@@ -2322,7 +2346,7 @@ def cmd_browse(args):
         if rows is None:
             _emit(extra, args, None, mode="browse")
             return
-        head = f"# browse: tag {args.tag}" if args.tag else "# browse: new"
+        head = f"# browse: tag {args.tag} (new)" if args.tag else "# browse: new"
         _emit({"data": rows, "since": day.isoformat(), "truncated": extra}, args,
               lambda r: "\n".join([head] + _since_block(rows, extra, day, args, tz_note)), mode="browse")
         return
@@ -2332,7 +2356,8 @@ def cmd_browse(args):
         rows = r.get("data") if isinstance(r, dict) else None
         if not isinstance(rows, list):
             return json.dumps(r, indent=2, ensure_ascii=False)
-        head = f"# browse: tag {args.tag}" if args.tag else f"# browse: {args.sort}"
+        order = args.sort + (f", {args.window}" if args.sort == "top" and args.window else "")
+        head = f"# browse: tag {args.tag} ({order})" if args.tag else f"# browse: {args.sort}"
         out = [head] + (_article_lines(rows, args.limit) or ["(nothing published here)"])
         page = _paged(r)
         if page:

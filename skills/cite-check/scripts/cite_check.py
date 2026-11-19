@@ -71,8 +71,16 @@ VERBS = (r"said|says|told|tells|wrote|writes|added|adds|asked|asks|stated|states
 # A name is up to four capitalised words, where a word carries no full stop unless it
 # is an initial ("J."). Allowing a stop inside a word let "said Jane Doe. Also" read
 # as the name "Jane Doe. Also" on the first live run.
-_NAME_WORD = r"[A-Z](?:\.|[\w'-]+)"
-NAME_RE = r"(" + _NAME_WORD + r"(?:\s+(?:" + _NAME_WORD + r"|de|van|von|la|le)){0,3})"
+_NAME_WORD = r"[A-Z](?:\.|[\w'\u2019-]+)"
+# An abbreviated title before a name ("Sen. Lisa Murkowski"). Without it the name read
+# as "Sen", which said nothing about who spoke, so the speaker check fell silent.
+_TITLE = (r"(?:(?:Sen|Rep|Gov|Lt|Dr|Mr|Mrs|Ms|Mx|Sgt|Capt|Cpl|Det|Atty|Supt|Rev|Hon|Gen|Col|Maj|"
+          r"Cmdr|Prof|Insp|Asst)\.\s+)?")
+NAME_RE = r"(" + _TITLE + _NAME_WORD + r"(?:\s+(?:" + _NAME_WORD + r"|de|van|von|la|le)){0,3})"
+# Words AP style puts right after an attribution ("said Jane Doe Wednesday"). They are
+# capitalised, so the name pattern takes them, and then the surname read as the day.
+_AFTER_NAME = frozenset("monday tuesday wednesday thursday friday saturday sunday "
+                        "today tonight yesterday tomorrow".split())
 
 
 def fence(text):
@@ -88,7 +96,7 @@ _QUOTE_RES = (
     # Straight double quotes, across a line wrap but not a blank line: a stray `"`
     # must not pair with one a paragraph later, and a quotation wrapped in a
     # Markdown draft used to be skipped without being counted.
-    re.compile(r"(?<![\w])\"((?:[^\"\n]|\n(?![ \t]*\n))+?)\"(?![\w])"),
+    re.compile(r"(?<![\w])\"((?:[^\"\n]|\n(?![^\S\n]*\n))+?)\"(?![\w])"),
 )
 
 
@@ -98,7 +106,10 @@ def _attribution(before, after):
     def clean(name):
         # A name ending a sentence carries its full stop ("said Jane Doe."), which
         # would then fail every comparison with a transcript's speaker label.
-        return name.rstrip(".,;:")
+        words = name.rstrip(".,;:").split()
+        while len(words) > 1 and words[-1].lower() in _AFTER_NAME:
+            words.pop()
+        return " ".join(words)
     m = re.match(r"\s*,?\s*(?:" + VERBS + r")\s+" + NAME_RE, after)
     if m:
         return clean(m.group(1))
@@ -114,6 +125,9 @@ def _attribution(before, after):
 def find_quotes(text, min_words=DEFAULT_MIN_WORDS):
     """Quotations in the draft, in order, without duplicates: dicts with the quote,
     its attribution (or None) and the line it starts on."""
+    # One line ending everywhere: a draft piped through stdin keeps CRLF, and a
+    # paragraph break written as \r\n\r\n then read as no break at all.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     seen, out = set(), []
     spans = []
     for rx in _QUOTE_RES:
@@ -195,12 +209,25 @@ _NOT_NAMES = frozenset(
     "vice assembly assemblymember member council councilmember councilor councilwoman councilman "
     "chair chairman chairwoman chairperson president commissioner superintendent director judge "
     "justice chief officer sgt sergeant capt captain lieutenant manager clerk attorney secretary "
-    "trustee board school city borough state the of jr sr ii iii iv".split())
+    "trustee board school city borough state the of jr sr ii iii iv cpl det atty supt rev gen col "
+    "maj cmdr prof insp asst phd md esq jd cpa dds rn".split())
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'", "\u02bb": "'"})
 
 
 def _name_words(name):
-    words = [w.strip("'-").lower() for w in re.findall(r"[A-Za-z][A-Za-z'-]*", name)]
-    return [w for w in words if len(w) > 1 and w not in _NOT_NAMES]
+    """The words of a name, lowercased, with accents and apostrophe styles folded, so
+    "Jos\u00e9 N\u00fa\u00f1ez" and "Jose Nunez", or O'Malley in either apostrophe, compare equal.
+    Titles and suffixes are dropped; initials are kept as one letter."""
+    text = unicodedata.normalize("NFKD", str(name).translate(_APOSTROPHES))
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    words = [w.strip("'-").lower() for w in re.findall(r"[^\W\d_](?:[^\W\d_]|['-])*", text)]
+    return [w for w in words if w and w not in _NOT_NAMES]
+
+
+def _surnames(word):
+    """A surname and, for a hyphenated one, each of its parts: "Smith-Jones" is
+    labelled "Smith" or "Jones" often enough."""
+    return {word, *[p for p in word.split("-") if len(p) > 1]}
 
 
 def same_person(draft_name, speaker):
@@ -213,23 +240,35 @@ def same_person(draft_name, speaker):
     and the speaker warning never showed."""
     if not draft_name or not speaker or re.match(r"(?i)^(speaker|unknown|unidentified)\b", speaker):
         return None
-    a, b = _name_words(draft_name), _name_words(speaker)
+    full_a, full_b = _name_words(draft_name), _name_words(speaker)
+    # The surname is the last word that is more than an initial.
+    a = [w for w in full_a if len(w) > 1]
+    b = [w for w in full_b if len(w) > 1]
     if not a or not b:
         return None
-    if a[-1] == b[-1]:
-        return True
-    if len(a) == 1 or len(b) == 1:
-        lone, full = (a, b) if len(a) == 1 else (b, a)
-        return None if lone[0] in full else False
-    return False
+    if not _surnames(a[-1]) & _surnames(b[-1]):
+        if len(a) == 1 or len(b) == 1:
+            lone, full = (a, b) if len(a) == 1 else (b, a)
+            return None if any(_surnames(lone[0]) & _surnames(w) for w in full) else False
+        return False
+    # Same surname. Two different first names are two people ("John Smith" and
+    # "Jane Smith"); an initial or a short form ("Rob", "Robert") is not evidence.
+    if len(full_a) > 1 and len(full_b) > 1:
+        fa, fb = full_a[0], full_b[0]
+        if not (fa.startswith(fb) or fb.startswith(fa)):
+            return False
+    return True
 
 
 # --- citations ------------------------------------------------------------------------
 
 def article_url(site, community, art):
-    slug = art.get("slug")
-    comm = (art.get("communities") or {}).get("slug") or art.get("community_slug") or community
-    return f"{site}/c/{comm}/{slug}" if slug else None
+    """The article's page, or None when its slug or community is not shaped like a
+    slug: the URL is fetched and printed, and both parts are the newsroom's text."""
+    slug = lna._safe(art.get("slug"), slug=True)
+    comm = lna._safe((art.get("communities") or {}).get("slug") or art.get("community_slug")
+                     or community, slug=True)
+    return f"{site}/c/{comm}/{slug}" if slug and comm else None
 
 
 def transcript_url(site, chunk):
@@ -258,7 +297,13 @@ def cite_transcript(site, chunk):
 # --- checking ----------------------------------------------------------------------------
 
 class Stop(Exception):
-    """The run cannot usefully continue (rate limit, timeout): report what was done."""
+    """The run cannot usefully continue (rate limit, timeout): report what was done.
+    `str()` is this tool's own summary; `detail` is what the server said, which is
+    rendered fenced, never inline."""
+
+    def __init__(self, summary, detail=None):
+        super().__init__(summary)
+        self.detail = detail
 
 
 def search(quote, community, limit):
@@ -276,8 +321,8 @@ def search(quote, community, limit):
         if e.code == lna.TIMED_OUT:
             raise Stop("a search timed out; run it again")
         if e.code == 0:
-            raise Stop(f"could not reach {lna.site_host()} ({e.body})")
-        raise Stop(f"a search failed ({e})")
+            raise Stop(f"could not reach {lna.site_host()}", detail=e.body)
+        raise Stop(f"a search failed (HTTP {e.code})", detail=e.body)
     data = resp.get("data") if isinstance(resp, dict) else None
     if not isinstance(data, dict):
         raise Stop("the search answered in a shape this client does not know")
@@ -398,6 +443,9 @@ def render(report):
     if report.get("stopped"):
         out.append(f"> **Stopped early: {report['stopped']}.** "
                    f"{report['unchecked']} quotation(s) were not checked.")
+        if report.get("stopped_detail"):
+            # What the server answered, which is its text, not this tool's.
+            out.append(fence(report["stopped_detail"]))
 
     for i, r in enumerate(report["results"], 1):
         out += ["", f"## {i}. {STATUS_LABEL[r['status']]} (line {r['line']})",
@@ -422,7 +470,9 @@ def render(report):
                    + "._")
         for corpus, why in r["not_searched"].items():
             extra = " Searching transcripts needs a subscriber's key." if corpus == "transcripts" else ""
-            out.append(f"_Not searched: {corpus}. {why}.{extra}_")
+            # The reason is usually the newsroom's own message, so it is fenced.
+            out.append(f"_Not searched: {corpus}.{extra} The newsroom's reason:_")
+            out.append(fence(why))
         for u in r.get("unread", []):
             out.append(f"_Could not read {u}._")
 
@@ -604,6 +654,8 @@ def main(argv=None):
     p.add_argument("--json", action="store_true", help="print the report as JSON (terms go to stderr)")
     p.add_argument("--out", help="also save the report as Markdown at this path, replacing a file already there")
     args = p.parse_args(argv)
+    if args.max_quotes < 1:
+        p.error("--max-quotes must be at least 1")
 
     text, label = read_draft(args.draft)
     quotes = find_quotes(text, args.min_words)
@@ -644,16 +696,17 @@ def main(argv=None):
 
     print(f"Checking {min(len(quotes), args.max_quotes)} quotation(s) against {newsroom_name(site)}: "
           "each quotation's words go to its search with your key; the draft does not.", file=sys.stderr)
-    results, cache, stopped = [], {}, None
+    results, cache, stopped, stopped_detail = [], {}, None, None
     todo = quotes[: args.max_quotes]
     for q in todo:
         try:
             results.append(check_quote(q, site, community, args.limit, args.read, cache))
         except Stop as s:
-            stopped = str(s)
+            stopped, stopped_detail = str(s), s.detail
             break
     report = {"draft": label, "newsroom": site, "community": community, "min_words": args.min_words,
-              "results": results, "stopped": stopped, "unchecked": len(todo) - len(results),
+              "results": results, "stopped": stopped, "stopped_detail": stopped_detail,
+              "unchecked": len(todo) - len(results),
               "skipped_by_max_quotes": max(0, len(quotes) - args.max_quotes),
               "close_ratio": CLOSE_RATIO,
               "generated_utc": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M")}
