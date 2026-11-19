@@ -47,7 +47,9 @@ pip install pytest
 python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
 ```
 
-Offline: no key, no network. CI runs them on Python 3.9, 3.11 and 3.13.
+Offline: no key, no network (HTTP is pointed at a closed port, so a test that needs the network
+fails). `LOCAL_NEWS_API_LIVE=1` adds the few `live` tests that call the real site. CI runs the
+offline suite on Python 3.9, 3.11 and 3.13.
 
 A new mode needs, at minimum:
 

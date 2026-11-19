@@ -32,7 +32,10 @@ pip install pytest
 python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
 ```
 
-The suite is **offline**: no key and no network. One test needs a real key and skips without it.
+The suite is **offline**: no key and no network. Every test runs with HTTP(S) sent to a closed
+local port, so a test that quietly needs the network fails rather than passes. Tests marked `live`
+call the real site and run only with `LOCAL_NEWS_API_LIVE=1`, where an unreachable site fails them;
+one more needs a real key and skips without it.
 CI runs the suite on Python 3.9, 3.11 and 3.13 and must pass before a pull request merges. Read
 the count from pytest's own output; do not copy a number from a document.
 

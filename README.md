@@ -172,7 +172,8 @@ pip install pytest
 python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
 ```
 
-Offline: no key and no network required. CI runs them on every push, across Python 3.9-3.13.
+Offline: no key and no network required (`LOCAL_NEWS_API_LIVE=1` adds a few tests that call the
+real site). CI runs them on every push, across Python 3.9-3.13.
 They cover the client, and also `SKILL.md` itself: conformance to the Agent Skills spec, the
 progressive-disclosure size budget, that every relative link resolves, and parity in both
 directions between the modes the CLI registers and the modes this repo documents.
