@@ -75,7 +75,7 @@ read in full per quotation, default 3), `--community`, `--dry-run`, `--json`, `-
 
 | Result | Means | What to do |
 |---|---|---|
-| **VERBATIM** | the words appear exactly, ignoring case, punctuation and curly quotes | cite it; for a transcript, check the speaker line |
+| **VERBATIM** | the words appear exactly, ignoring case, punctuation and curly quotes | cite it; for a transcript, check the speaker line. It shows who said them, **not that they are true** |
 | **CLOSE** | a passage nearly matches; the source's own words are shown beside yours | use the source's words, or paraphrase without quotation marks |
 | **NOT FOUND** | nothing matched in what was searched | **not evidence the quote is wrong**: it may come from a source this newsroom does not hold. Find the primary record |
 | **NOT SEARCHED** | the key could not reach anything for it | see the reason; transcripts need a subscriber's key |
@@ -157,6 +157,9 @@ re-implemented.
   harder.
 - **Transcripts are machine transcriptions.** A VERBATIM match to a transcript means the
   transcript says so; for a quote that matters, listen at the linked timestamp.
+- **A match is attribution, not verification.** VERBATIM establishes who said the words, or where
+  they were published. A claim inside the quotation (a figure, a date, a fact about someone) still
+  needs its own source, and every VERBATIM result says so.
 - **It reads quotations, not paraphrase.** A claim without quotation marks is not checked.
 
 ## Related skills

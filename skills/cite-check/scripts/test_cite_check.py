@@ -76,6 +76,26 @@ class TestFindingQuotations:
         assert cc.find_quotes(text, 5)[0]["attributed_to"] == who
 
 
+class TestAVerbatimMatchIsNotATruthClaim:
+    """A VERBATIM match establishes who said the words, or where they were published,
+    and nothing about whether what they say is so. Every VERBATIM advice says that,
+    because "VERBATIM" next to a claim reads as "verified" to someone in a hurry."""
+
+    @pytest.mark.parametrize("source,speaker_ok", [("transcript", True), ("transcript", None),
+                                                   ("transcript", False), ("article", None)])
+    def test_every_verbatim_advice_says_it(self, source, speaker_ok):
+        r = {"status": "verbatim", "attributed_to": "Jane Doe",
+             "matches": [{"kind": "verbatim", "source": source, "speaker": "Jane Doe",
+                          "speaker_matches_draft": speaker_ok}]}
+        assert cc.NOT_A_TRUTH_CLAIM in cc._advice(r)
+
+    def test_other_results_do_not_say_it(self):
+        for status in ("close", "not found", "not searched"):
+            r = {"status": status, "attributed_to": None,
+                 "matches": [{"kind": "close", "source": "article", "speaker_matches_draft": None}]}
+            assert cc.NOT_A_TRUTH_CLAIM not in cc._advice(r)
+
+
 class TestComparing:
     SRC = "Assembly member Jane Doe: Well, we will finish the port by next spring, and I mean it."
 

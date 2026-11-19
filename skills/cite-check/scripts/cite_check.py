@@ -352,20 +352,30 @@ STATUS_LABEL = {"verbatim": "VERBATIM", "close": "CLOSE", "not found": "NOT FOUN
                 "not searched": "NOT SEARCHED"}
 
 
+# A match is attribution, never verification: it says who said the words, or where they
+# were published, and nothing about whether what they say is so.
+NOT_A_TRUTH_CLAIM = ("A match shows who said these words, or where they were published, not that what "
+                     "they say is true: a claim inside a quotation needs its own source.")
+
+
+def _verbatim_advice(r):
+    m = r["matches"][0]
+    if m["source"] == "transcript":
+        if m["speaker_matches_draft"] is False:
+            # The label itself stays in the fenced source below: it is the
+            # newsroom's text, and printed here it could speak from outside the fence.
+            return ("The words are in the transcript, but under a different speaker from the one the "
+                    "draft names (the label is in the source below). Speaker labels come from the "
+                    "newsroom's processing and can be wrong: check the recording at the link before "
+                    "you attribute these words.")
+        return "On the public record. Cite the meeting and link the transcript at that moment."
+    return ("These are the newsroom's published words. If they are its reporting rather than a quote "
+            "it carried, attribute them to the newsroom and link the article.")
+
+
 def _advice(r):
     if r["status"] == "verbatim":
-        m = r["matches"][0]
-        if m["source"] == "transcript":
-            if m["speaker_matches_draft"] is False:
-                # The label itself stays in the fenced source below: it is the
-                # newsroom's text, and printed here it could speak from outside the fence.
-                return ("The words are in the transcript, but under a different speaker from the one the "
-                        "draft names (the label is in the source below). Speaker labels come from the "
-                        "newsroom's processing and can be wrong: check the recording at the link before "
-                        "you attribute these words.")
-            return "On the public record. Cite the meeting and link the transcript at that moment."
-        return ("These are the newsroom's published words. If they are its reporting rather than a quote "
-                "it carried, attribute them to the newsroom and link the article.")
+        return f"{_verbatim_advice(r)} {NOT_A_TRUTH_CLAIM}"
     if r["status"] == "close":
         return ("A source says nearly this. Use the source's own words below, or paraphrase without "
                 "quotation marks.")

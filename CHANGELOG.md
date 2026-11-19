@@ -43,6 +43,13 @@ failing on the previous code first.
   It reads across a line wrap, though still not across a blank line.
 - **`browse --tag` dropped `--sort` and `--window`**, which the tag route accepts.
 
+### Changed
+
+- **`cite-check` says a match is not a fact check.** Every VERBATIM result now adds that a match
+  shows who said the words, or where they were published, not that what they say is true, and that
+  a claim inside the quotation needs its own source. From a review of the civic-record prototype,
+  whose rule is that matching establishes relatedness, never truth.
+
 ## local-news-api 1.8.1, meeting-prep 0.2.1 and cite-check 0.2.1 - 2026-11-19
 
 From a code review of the 1.8.0 and 0.2.0 releases. Each fix landed with a test shown failing on
