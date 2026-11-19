@@ -19,14 +19,14 @@ compatibility: >-
   keyed modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.8.0"
+  version: "1.8.1"
   author: Communities News, Inc.
   homepage: https://communities.news
   repository: news-community/news-skills
   openclaw: {"primaryEnv": "COMMUNITIES_NEWS_API_KEY", "requires": {"bins": ["python3"]},
     "homepage": "https://communities.news",
     "envVars": [
-      {"name": "COMMUNITIES_NEWS_API_KEY", "required": false, "description": "Your cn_ key. The public modes (digest, events, transcript, near, topics, tags) run without it."},
+      {"name": "COMMUNITIES_NEWS_API_KEY", "required": false, "description": "Your cn_ key. The public modes (digest, events, transcript, near, topics, tags, article by slug, browse --tag) run without it."},
       {"name": "NEWS_DESK_API_KEY", "required": false, "description": "Older name for the key, still read."},
       {"name": "ALASKA_DESK_API_KEY", "required": false, "description": "Oldest name for the key, still read."},
       {"name": "NEWS_SITE", "required": false, "description": "Newsroom origin; default https://alaskanews.com."},
@@ -142,7 +142,7 @@ Access is tiered on the platform side, and your key may not reach everything.
 | `angles` | **any valid key** | discovery scaffold; runs on the `/search` surface |
 | `brief` | **any valid key** | research brief: one `/search`, arranged for a writer, then four blanks |
 | `article` | **public by URL/slug**, keyed by id | the id form returns the richer record |
-| `transcript` | **public** | one full meeting transcript with speakers + timestamps, paged with `--offset`. Verified 2026-11-19 (404, not 401, without a key) |
+| `transcript` | **public** (by platform code; a keyless 404 for an unknown id is consistent, not proof) | one full meeting transcript with speakers + timestamps, paged with `--offset` |
 | `events` | **public** | `GET /calendar`, date-ranged, public since 2026-11-04. Verified 2026-11-19 |
 | `communities` | **any valid key** | the slugs `--community` accepts |
 | `browse` | **any valid key**; `--tag` **public** | the published article list; `--tag` for one beat, `--since` for what is new |
@@ -246,9 +246,10 @@ that default is also the whole of production. Nothing about a market is compiled
 follow whatever `NEWS_SITE` and `--community` say. `check` prints which newsroom and community it is reporting on, because a
 reachability report that does not name its subject is the kind of thing you read wrongly once.
 
-**Paging.** Every list mode takes `--limit` and `--offset`, and prints `showing 1-20 of 340` with the
-next `--offset` when there is more. A page that quietly drops the rest is how you conclude there are
-three of something when there are ninety.
+**Paging.** `browse`, `events`, `transcript`, `people`, `person`, `topics`, `tags`, `clips` and
+`near` take `--limit` and `--offset`, and print `showing 1-20 of 340` with the next `--offset` when
+there is more; `search`, `angles`, `brief` and `rag` take `--limit` only. A page that quietly drops
+the rest is how you conclude there are three of something when there are ninety.
 
 Add `--json` for raw responses, `--community <slug>` to target a community other than `alaska-news`
 (run `communities` to see which slugs exist).
@@ -294,7 +295,7 @@ phrase with no matching published story behind it.
 
 ---
 
-## Honest limits (as of 2026-09-09)
+## Honest limits
 
 - **What was verified, with which key:** [`references/verification.md`](references/verification.md).
   `check` is the only answer about *your* key.

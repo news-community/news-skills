@@ -1,10 +1,56 @@
 # Changelog
 
-The skill declares a `version` under `metadata` in
-[`SKILL.md`](skills/local-news-api/SKILL.md). This file is what that number refers to.
+Each skill declares its own `version` under `metadata` in its `SKILL.md`
+([`local-news-api`](skills/local-news-api/SKILL.md), [`meeting-prep`](skills/meeting-prep/SKILL.md),
+[`cite-check`](skills/cite-check/SKILL.md)). This file is what those numbers refer to; each entry
+names the skill.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
+
+## local-news-api 1.8.1, meeting-prep 0.2.1 and cite-check 0.2.1 - 2026-11-19
+
+From a code review of the 1.8.0 and 0.2.0 releases. Each fix landed with a test shown failing on
+the previous code first.
+
+### Security
+
+- **The source fence could still be closed from inside.** One pass of breaking up `<<<` turned five
+  brackets into a real closing marker, so text after it read as outside the fence. It now repeats
+  until none is left.
+- **`cite-check` fences its citations**, which carry the newsroom's titles and speaker names.
+
+### Fixed
+
+- **`person --since` stopped at 100 rows without saying so.** The platform reported that route's
+  total as the page's own length, so `has_more` was always false; the client now believes
+  `has_more` only for a short page (and the platform route is fixed).
+- **`events "<query>" --json` returned the whole window unfiltered.** It returns the matches, how
+  many events were scanned, and whether the scan stopped early.
+- **Next steps run as printed.** Every command names the script and parses in a shell, checked by
+  running each through `bash -n`; one was a syntax error (`... ; then rerun`). Steps that are things
+  to do rather than commands are plain text, and `--json` labels them `instruction`.
+- **No step outranks the one before it**, in any mode, and `check` no longer starts on a medium step.
+- **`meeting-prep`'s widen step kept narrowing**: on a run that used `--any-word` it dropped it. It
+  keeps it, and is not offered when it would repeat the same run.
+- **Suggested reruns keep your options** (`--community`, `--min-words`, `--days`, `--tz`...), so they
+  check the same newsroom and the same quotations.
+- **`cite-check --dry-run --json` printed prose**; it prints JSON. A dry run with no quotation long
+  enough now points at a shorter `--min-words`, a run with `--out` no longer suggests `--out`, and a
+  draft read from stdin gets a placeholder rather than `-`.
+
+### Tests
+
+- **Every test is offline**, including `meeting-prep`, `cite-check` and `tests/`, through a root
+  `conftest.py`. Several tests that could not fail now can: the `--since` stop rule, the injection
+  guard on every pre-fill path, priority order with every optional step present, and `_ranked`
+  (which no longer relabels the first step to look right).
+
+### Docs
+
+- `SKILL.md` names which modes page, no longer calls `transcript` verified public on a keyless 404,
+  and lists every keyless mode; `SECURITY.md` counts its four behaviours; this file's intro covers
+  three skills.
 
 ## local-news-api 1.8.0, meeting-prep 0.2.0 and cite-check 0.2.0 - 2026-11-19
 

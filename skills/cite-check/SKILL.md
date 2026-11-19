@@ -16,7 +16,7 @@ compatibility: >-
   COMMUNITIES_NEWS_API_KEY; checking against transcripts needs a subscriber's key.
 allowed-tools: Bash
 metadata:
-  version: "0.2.0"
+  version: "0.2.1"
   author: Communities News, Inc.
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -89,11 +89,13 @@ For an **article** match, the words are the newsroom's published text. If they a
 rather than a quotation it carried, attribute them to the newsroom.
 
 The report ends with a **Citations** list: title, newsroom, date and URL for articles; speaker,
-meeting, timestamp and URL for transcripts. Then **Next steps**: commands to run next, highest
-priority first, each with its reason and marked `high`, `medium` or `low`. A speaker mismatch or
+meeting, timestamp and URL for transcripts. The citations, like every passage from the newsroom, are inside the source-material fence. Then
+**Next steps**: what to do next, highest priority first, each with its reason and marked `high`,
+`medium` or `low`; commands keep your own options, and a step that is not a command is plain text. A speaker mismatch or
 a quotation not found leads the list; a not-found quotation gets a search command with its own
-words filled in. `--dry-run` ends with the command that runs the real check. `--json` puts the same
-steps on stderr as JSON, beside the terms, and keeps stdout the report.
+words filled in. `--dry-run` ends with the command that runs the real check, or with a shorter `--min-words` when
+nothing was long enough; `--dry-run --json` prints the dry run as JSON. `--json` puts the same steps
+on stderr as JSON, beside the terms, and keeps stdout the report.
 
 ## How it decides
 

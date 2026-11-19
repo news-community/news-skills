@@ -280,3 +280,56 @@ class TestNextSteps:
         json.loads(cap.out)
         line = [l for l in cap.err.splitlines() if l.startswith('{"next_steps"')][0]
         assert json.loads(line)["next_steps"][0]["priority"] == "high"
+
+
+class TestNextStepsRunAndKeepTheRun:
+    """From a code review of 0.2.0: a widen step that dropped --any-word, reruns that
+    dropped the user's flags, a step that was a shell syntax error, and a ranking that
+    only looked right because the first step was relabelled."""
+
+    def _steps(self, out):
+        return out.split("## Next steps", 1)[1].split("Related:", 1)[0]
+
+    def test_widen_keeps_any_word_and_the_users_flags(self, api, capsys, monkeypatch):
+        monkeypatch.setenv(lna.KEY_ENV, "cn_" + "0" * 40)
+        api([], search={"data": {}})
+        out = run(capsys, "zzqx nothing", "--any-word", "--days", "30", "--community", "other-news",
+                  "--all-types")
+        steps = self._steps(out)
+        assert "--any-word --days 90" in steps and "--community other-news" in steps and "--all-types" in steps
+
+    def test_no_widen_step_repeats_the_same_run(self, api, capsys, monkeypatch):
+        monkeypatch.setenv(lna.KEY_ENV, "cn_" + "0" * 40)
+        api([], search={"data": {}})
+        out = run(capsys, "zzqx", "--any-word", "--days", "366")
+        assert "--days 366" not in self._steps(out), "a rerun with the same window and match is the same run"
+
+    def test_a_hostile_source_id_is_not_copied(self, api, capsys, monkeypatch):
+        monkeypatch.setenv(lna.KEY_ENV, "cn_" + "0" * 40)
+        api([ev(1, "Port hearing")], search={"data": {
+            "transcripts": {"results": [{"source_id": "x; rm -rf ~", "content": "x", "start_time": 3}]},
+            "articles": {"results": []}, "speakers": {"results": []}, "events": {"results": []}}})
+        assert "rm -rf" not in self._steps(run(capsys, "port"))
+
+    @pytest.mark.parametrize("keyed", [True, False])
+    def test_every_command_parses_in_a_shell(self, api, capsys, monkeypatch, keyed):
+        import re as _re, shutil, subprocess
+        if keyed:
+            monkeypatch.setenv(lna.KEY_ENV, "cn_" + "0" * 40)
+        api([], search={"data": {}})
+        mp.main(["port it's", "--json", "--community", "a b"])
+        line = [l for l in capsys.readouterr().err.splitlines() if l.startswith('{"next_steps"')][0]
+        bash = shutil.which("bash")
+        for st in json.loads(line)["next_steps"]:
+            if st["command"] and bash:
+                cmd = _re.sub(r"<[^>]+>", "X", st["command"])
+                assert subprocess.run([bash, "-n", "-c", cmd]).returncode == 0, st["command"]
+
+    def test_ranked_sorts_without_relabelling(self):
+        steps = [mp._do("c", "w", "low"), mp._do("b", "w", "medium"), mp._do("a", "w", "high")]
+        assert [s[2] for s in mp._ranked(steps)] == ["high", "medium", "low"]
+        assert mp._ranked([mp._do("b", "w", "medium")])[0][2] == "medium"
+
+    def test_this_suite_is_offline(self):
+        import os
+        assert os.environ.get("https_proxy") == "http://127.0.0.1:9" or os.environ.get("LOCAL_NEWS_API_LIVE")

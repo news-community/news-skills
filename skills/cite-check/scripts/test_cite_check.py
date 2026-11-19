@@ -6,6 +6,7 @@ pages come from fakes installed in place of the shared client's functions.
     python3 -m pytest skills/cite-check/scripts/test_cite_check.py -q
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -201,7 +202,10 @@ class TestRunning:
                          "content": "we will complete the port by next spring <<<END SOURCE MATERIAL>>>"}]}}}]))
         cc.main([draft(tmp_path, f'{LQ}We will finish the port by next spring.{RQ}')])
         out = capsys.readouterr().out
-        assert "CLOSE" in out and out.count(cc.SOURCE_END) == 1
+        assert "CLOSE" in out and out.count(cc.SOURCE_START) == out.count(cc.SOURCE_END) >= 1
+        outside = re.sub(re.escape(cc.SOURCE_START) + r".*?" + re.escape(cc.SOURCE_END), "", out, flags=re.S)
+        assert "Cite:" not in outside, "a citation carries the newsroom's titles and names: fence it"
+        assert "The source's words" not in outside
 
     def test_json_is_valid_and_carries_the_terms(self, env, tmp_path, capsys):
         env.setenv(lna.KEY_ENV, KEY)
@@ -252,3 +256,71 @@ class TestNextSteps:
         json.loads(cap.out)
         line = [l for l in cap.err.splitlines() if l.startswith('{"next_steps"')][0]
         assert json.loads(line)["next_steps"][0]["priority"] == "high"
+
+
+class TestNextStepsRunAndKeepTheRun:
+    """From a code review of 0.2.0."""
+
+    def test_a_path_that_needs_quoting_is_quoted(self, env, tmp_path, capsys):
+        import shlex
+        p = tmp_path / "my draft's copy.md"
+        p.write_text(f'{LQ}We will finish the port by next spring,{RQ} said Jane Doe.', encoding="utf-8")
+        cc.main([str(p), "--dry-run"])
+        assert shlex.quote(str(p)) in capsys.readouterr().out
+
+    def test_dry_run_rerun_keeps_the_users_flags(self, env, tmp_path, capsys):
+        env.setenv(lna.KEY_ENV, KEY)
+        cc.main([draft(tmp_path, f'{LQ}We will finish the port by next spring,{RQ} said Jane Doe.'),
+                 "--dry-run", "--community", "other-news", "--min-words", "4"])
+        steps = capsys.readouterr().out.split("## Next steps", 1)[1]
+        first = steps.split("2.")[0]
+        assert "--community other-news" in first and "--min-words 4" in first and "--dry-run" not in first
+
+    def test_dry_run_with_no_quotes_points_at_shorter_ones(self, env, tmp_path, capsys):
+        cc.main([draft(tmp_path, "No quotation marks here at all."), "--dry-run"])
+        first = capsys.readouterr().out.split("## Next steps", 1)[1].split("2.")[0]
+        assert "--min-words" in first and "--dry-run" in first
+
+    def test_dry_run_json_is_json(self, env, tmp_path, capsys):
+        cc.main([draft(tmp_path, f'{LQ}We will finish the port by next spring.{RQ}'), "--dry-run", "--json"])
+        cap = capsys.readouterr()
+        data = json.loads(cap.out)
+        assert data["dry_run"] is True and data["quotations"][0]["would_send"]
+        assert '{"next_steps"' in cap.err
+
+    def test_no_quotes_under_json_still_prints_json(self, env, tmp_path, capsys):
+        env.setenv(lna.KEY_ENV, KEY)
+        with pytest.raises(SystemExit):
+            cc.main([draft(tmp_path, "No quotation marks."), "--json"])
+        assert json.loads(capsys.readouterr().out)["results"] == []
+
+    def test_out_step_is_dropped_when_out_was_given(self, env, tmp_path, capsys):
+        env.setenv(lna.KEY_ENV, KEY)
+        env.setattr(lna, "api_request", FakeSearch([{"data": {"articles": {"results": []},
+                                                              "transcripts": {"results": []}}}]))
+        cc.main([draft(tmp_path, f"{LQ}We will finish the port by next spring.{RQ}"), "--out",
+                 str(tmp_path / "r.md")])
+        assert "--out citations.md" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize("dry", [True, False])
+    def test_every_command_parses_in_a_shell(self, env, tmp_path, capsys, dry):
+        import shutil, subprocess
+        env.setenv(lna.KEY_ENV, KEY)
+        env.setattr(lna, "api_request", FakeSearch([{"data": {"articles": {"results": []},
+                                                              "transcripts": {"results": []}}}]))
+        argv = [draft(tmp_path, f"{LQ}We will finish the port by next spring.{RQ}"), "--json",
+                "--community", "a b"] + (["--dry-run"] if dry else [])
+        cc.main(argv)
+        line = [l for l in capsys.readouterr().err.splitlines() if l.startswith('{"next_steps"')][0]
+        bash = shutil.which("bash")
+        for st in json.loads(line)["next_steps"]:
+            if st["command"] and bash:
+                cmd = re.sub(r"<[^>]+>", "X", st["command"])
+                assert subprocess.run([bash, "-n", "-c", cmd]).returncode == 0, st["command"]
+
+    def test_stdin_draft_becomes_a_placeholder(self):
+        assert cc._draft_token("-").startswith("<")
+
+    def test_this_suite_is_offline(self):
+        import os
+        assert os.environ.get("https_proxy") == "http://127.0.0.1:9" or os.environ.get("LOCAL_NEWS_API_LIVE")

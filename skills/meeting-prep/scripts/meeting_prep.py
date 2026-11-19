@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import local_news_api as lna  # noqa: E402  (the shared client, shipped beside this file)
 
 NAME = "meeting-prep"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 UA = f"{NAME}/{VERSION}"
 # The shared client reads its User-Agent from this module global on every request,
 # so the newsroom sees which skill asked.
@@ -389,26 +389,49 @@ CLIENT = "python3 scripts/local_news_api.py"
 
 
 def _ranked(steps):
+    """Highest priority first, at most five. Every builder includes a high step, so
+    the first one is high on its own merits; nothing here relabels it."""
     order = ("high", "medium", "low")
-    steps = sorted(steps, key=lambda s: order.index(s[2]))[:5]
-    if steps and steps[0][2] != "high":
-        steps[0] = (steps[0][0], steps[0][1], "high")  # always a clear place to start
-    return steps
+    return sorted(steps, key=lambda s: order.index(s[2]))[:5]
+
+
+def _cmd(text, why, prio):
+    """A step that is a shell command, runnable as printed (a `<placeholder>` marks
+    what you fill in)."""
+    return (text, why, prio, True)
+
+
+def _do(text, why, prio):
+    """A step that is something to do, not a command."""
+    return (text, why, prio, False)
 
 
 def render_next(steps, related):
     out = ["", "## Next steps"]
-    for i, (cmd, why, prio) in enumerate(steps, 1):
-        out += [f"{i}. [{prio}] `{cmd}`", f"   {why}"]
+    for i, (text, why, prio, is_cmd) in enumerate(steps, 1):
+        out += [f"{i}. [{prio}] " + (f"`{text}`" if is_cmd else text), f"   {why}"]
     out += ["", "Related: " + " · ".join(related),
-            f"See also: SKILL.md (beside this script) · {REPO_URL}"]
+            f"See also: SKILL.md (in this skill's folder) · {REPO_URL}"]
     return "\n".join(out)
+
+
+def _carry(args, spec):
+    """The user's own non-default flags, shell-quoted, so a suggested rerun runs the
+    same check on the same newsroom. spec: (dest, flag, default)."""
+    out = []
+    for dest, flag, default in spec:
+        v = getattr(args, dest, default)
+        if v is None or v == default:
+            continue
+        out.append(flag if v is True else f"{flag} {shlex.quote(str(v))}")
+    return (" " + " ".join(out)) if out else ""
 
 
 def json_next(steps):
     """--json keeps stdout the page itself, so the next steps go to stderr as JSON."""
-    print(json.dumps({"next_steps": [{"command": c, "reason": w, "priority": p} for c, w, p in steps]},
-                     ensure_ascii=False), file=sys.stderr)
+    print(json.dumps({"next_steps": [
+        {"command": t if is_cmd else None, "instruction": None if is_cmd else t, "reason": w, "priority": p}
+        for t, w, p, is_cmd in steps]}, ensure_ascii=False), file=sys.stderr)
 
 
 RELATED = ["local-news-api (the full client, shipped here as scripts/local_news_api.py; its `check` shows "
@@ -416,30 +439,52 @@ RELATED = ["local-news-api (the full client, shipped here as scripts/local_news_
            "cite-check (checks a draft's quotes against the same record, and writes the citations)"]
 
 
-def next_steps(page, has_key):
+MP_FLAGS = (("days", "--days", 30), ("community", "--community", None), ("all_types", "--all-types", False),
+            ("limit", "--limit", 10), ("history", "--history", 5), ("tz", "--tz", None),
+            ("any_word", "--any-word", False))
+
+
+def next_steps(page, has_key, args=None):
     rec, steps = page["record"], []
     topic = shlex.quote(page["topic"])
+    same = _carry(args, MP_FLAGS) if args is not None else ""
     if not has_key:
-        steps.append((f"echo '{lna.KEY_ENV}=cn_...' >> .env.local ; then rerun",
-                      "the record part (coverage, what was said before, who is on the record) needs your "
-                      "own key; the calendar part above does not", "high"))
+        steps.append(_cmd(f"echo '{lna.KEY_ENV}=cn_<your key>' >> .env.local && "
+                          f"python3 scripts/meeting_prep.py {topic}{same}",
+                          "the record part (coverage, what was said before, who is on the record) needs your "
+                          "own key; the calendar part above does not", "high"))
     if not page["upcoming"] and not page["deadlines"]:
-        widen = "" if page["match_rule"] == "any word" else " --any-word"
-        days = max(90, page["window_days"] * 2)
-        steps.append((f"python3 scripts/meeting_prep.py {topic}{widen} --days {min(days, 366)}",
-                      "nothing on the calendar matched: a body words its agenda its own way, and hearings "
-                      "are often noticed weeks out", "high"))
+        days = min(366, max(90, page["window_days"] * 2))
+        already = page["match_rule"] == "any word" and page["window_days"] >= days
+        if not already:
+            wider = [f for f in MP_FLAGS if f[0] not in ("days", "any_word")]
+            keep = _carry(args, wider) if args is not None else ""
+            steps.append(_cmd(f"python3 scripts/meeting_prep.py {topic} --any-word --days {days}{keep}",
+                              "nothing on the calendar matched: a body words its agenda its own way, and "
+                              "hearings are often noticed weeks out", "high"))
+        else:
+            steps.append(_do("try different words for the topic, as the body itself would name it",
+                             "nothing matched any word over the widest window, so the wording is the next lever",
+                             "high"))
+    if page["upcoming"]:
+        steps.append(_do("open the official notice for the first meeting above",
+                         "the notice, not this listing, is what says the time, the place and how to take part",
+                         "high"))
     sid = next((v for v in (lna._safe(t.get("source_id")) for t in rec.get("transcripts") or []) if v), None)
     if sid:
-        steps.append((f"{CLIENT} transcript {sid}",
-                      "read the whole earlier meeting before you speak; an excerpt can miss what changed", "medium"))
+        steps.append(_cmd(f"{CLIENT} transcript {sid}",
+                          "read the whole earlier meeting before you speak; an excerpt can miss what changed",
+                          "medium"))
     slug = next((v for v in (lna._safe(a.get("slug"), slug=True) for a in rec.get("articles") or []) if v), None)
     if slug:
-        steps.append((f"{CLIENT} article {slug}", "read the coverage you will cite in full, not its headline",
-                      "medium"))
-    steps.append(("python3 <cite-check>/scripts/cite_check.py <your draft> --dry-run",
-                  "if you write about the meeting, check your quotes against the record before you publish",
-                  "low"))
+        steps.append(_cmd(f"{CLIENT} article {slug}", "read the coverage you will cite in full, not its headline",
+                          "medium"))
+    steps.append(_do("if cite-check is installed, run it on your draft with --dry-run",
+                     "if you write about the meeting, check your quotes against the record before you publish",
+                     "low"))
+    if not any(st[2] == "high" for st in steps):
+        steps.append(_do("read the sections above, starting with what was said last time",
+                         "nothing on the page needs fixing first; the record is the place to start", "high"))
     return _ranked(steps)
 
 
@@ -477,7 +522,7 @@ def main(argv=None):
         raise
 
     terms = lna.terms_note()
-    steps = next_steps(page, bool(lna.read_key()))
+    steps = next_steps(page, bool(lna.read_key()), args)
     if args.json:
         page["terms"] = terms
         print(json.dumps(page, indent=2, ensure_ascii=False))

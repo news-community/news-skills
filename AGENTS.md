@@ -50,7 +50,8 @@ python3 -m pytest skills/meeting-prep/scripts skills/cite-check/scripts tests -q
 ```
 
 The suite is **offline**: no key and no network. Every test runs with HTTP(S) sent to a closed
-local port, so a test that quietly needs the network fails rather than passes. Tests marked `live`
+local port (the client's suite inline, everything else through the root `conftest.py`), so a test
+that quietly needs the network fails rather than passes. Tests marked `live`
 call the real site and run only with `LOCAL_NEWS_API_LIVE=1`, where an unreachable site fails them;
 one more needs a real key and skips without it.
 CI runs the suite on Python 3.9, 3.11 and 3.13 and must pass before a pull request merges. Read

@@ -65,6 +65,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import socket
 import sys
 import urllib.error
@@ -89,7 +90,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.8.0"
+UA = "local-news-api/1.8.1"
 
 
 def site():
@@ -660,12 +661,33 @@ def _or(value, placeholder):
     return value if value else placeholder
 
 
+def _cli():
+    """How to run this client again, as it was run this time, so a step is a
+    command a shell accepts rather than a bare mode name."""
+    me = sys.argv[0] if sys.argv and str(sys.argv[0]).endswith("local_news_api.py") else "scripts/local_news_api.py"
+    return f"python3 {shlex.quote(me)}"
+
+
+_MODE_NAMES = frozenset(RELATED_MODES.replace("·", " ").split())
+
+
+def _runnable(cmd):
+    """A mode command, with the client's own invocation in front of each mode
+    (`... && check` included). Shell words (echo, curl) pass through."""
+    parts = [p.strip() for p in cmd.split("&&")]
+    return " && ".join(f"{_cli()} {p}" if p.split(" ", 1)[0] in _MODE_NAMES else p for p in parts)
+
+
 def _skill_next_steps(mode, args, has_key, state=None, resp=None) -> list:
+    return [(_runnable(c), w, p) for c, w, p in _steps_for(mode, args, has_key, state, resp)]
+
+
+def _steps_for(mode, args, has_key, state=None, resp=None) -> list:
     """State-driven next actions for THIS skill: (command, reason, priority).
     Highest first, capped at 5 by the caller. State is `has_key`, the response
     (for real ids) and per-mode context."""
     rows = _rows(resp)
-    key_step = (f"echo '{KEY_ENV}=cn_...' >> .env.local ; then `check`",
+    key_step = (f"echo '{KEY_ENV}=cn_<your key>' >> .env.local && check",
                 "the public modes work without a key; a key unlocks search, brief, browse, people, "
                 "clips and the rest", "high")
     if mode == "digest":
@@ -675,17 +697,18 @@ def _skill_next_steps(mode, args, has_key, state=None, resp=None) -> list:
                 ("article <slug of a story above>", "read one in full, and cite the article, not this summary", "high"),
                 ('brief "<topic from a story above>"',
                  "turn a story into a research brief: prior coverage, the record, who is on it", "medium"),
-                ("digest --date <the day before>", "step back a day", "low"),
             ]
         else:
             steps.append(("digest --date today", "today's stories with a one-line summary each",
                           "medium" if steps else "high"))
         steps += [('search "<topic from a headline above>"',
                    "internal before external: confirm what the newsroom already has before you write", "medium")]
+        if getattr(args, "date", None):
+            steps.append(("digest --date <the day before>", "step back a day", "low"))
         return steps
     if mode == "check":
         if not has_key:
-            return [(f"set {KEY_ENV}, then re-run `check`",
+            return [(f"echo '{KEY_ENV}=cn_<your key>' >> .env.local && check",
                      "the public modes work without a key; the rest report their reach once one is set", "high"),
                     ("digest", "works now, with no key", "medium")]
         # Read the probe results rather than assuming they passed. This block
@@ -695,15 +718,17 @@ def _skill_next_steps(mode, args, has_key, state=None, resp=None) -> list:
         reached = {k for k, v in surfaces.items() if v == "OK"}
         rejected = [v for v in surfaces.values() if str(v).startswith("rejected")]
         if rejected and not (reached - {"digest (public)"}):
-            return [("replace the key, then re-run `check`",
-                     "every keyed request was refused, so there is nothing to try until it works", "high"),
+            return [(f"echo '{KEY_ENV}=cn_<a new key>' >> .env.local && check",
+                     "replace the key: every keyed request was refused, so there is nothing to try until it works",
+                     "high"),
                     ("digest", "digest needs no key and still works", "medium")]
         steps = []
         if "search" in reached:
             steps.append(('search "<topic>"', "your key reached search; start there", "high"))
             steps.append(('angles "<topic>" --intent similar', "or work a story across the five Ws", "medium"))
         if "calendar (events)" in reached or surfaces.get("calendar (events)") == "OK (public)":
-            steps.append(("events --days 14", "the calendar needs no key; see what is coming up", "medium"))
+            steps.append(("events --days 14", "the calendar needs no key; see what is coming up",
+                          "medium" if steps else "high"))
         if not steps:
             steps.append(("digest", "the keyed surfaces did not answer; digest needs no key", "high"))
         return steps[:5]
@@ -754,8 +779,8 @@ def _skill_next_steps(mode, args, has_key, state=None, resp=None) -> list:
             (f"article {_or(aid, '<id from a hit above>')}",
              "open a match: a SECOND axis agreeing makes it relevant; an independent source makes it confirmed", "high"),
             ('rag "<seed>"', "expand What+Why across time (ignore When): prior coverage and precedent", "medium"),
-            ('angles "<seed>" --intent track   (or: local, precedent, angle)',
-             "pivot the fixed pair: each intent fixes a different two Ws and expands the rest", "low"),
+            ('angles "<seed>" --intent track',
+             "pivot the fixed pair (or --intent local, precedent, angle): each fixes a different two Ws", "low"),
         ]
     if mode == "people":
         pid = _first(rows)
@@ -935,7 +960,11 @@ def _fence(text):
     """Wrap returned content so it reaches the agent marked as data. Any `<<<` in
     the content is broken up first, so a story cannot close the fence early and
     speak from outside it."""
-    body = str(text).rstrip().replace("<<<", "<< <")
+    body = str(text).rstrip()
+    # Repeat until none is left: one pass turns `<<<<<` into `<< <<<`, which still
+    # holds a `<<<` and could still spell the closing marker.
+    while "<<<" in body:
+        body = body.replace("<<<", "<< <")
     return f"{SOURCE_START}\n{body}\n{SOURCE_END}"
 
 
@@ -1532,7 +1561,13 @@ def cmd_events(args):
                 truncated = True
                 break
         if isinstance(rows, list):
-            resp = {"data": {"events": events}}
+            # Filter here, not only in render, so --json carries the matches and says
+            # whether the scan stopped early, rather than the whole window unfiltered.
+            q = args.query.lower()
+            matched = [e for e in events if isinstance(e, dict) and q in
+                       f"{e.get('event_title') or ''} {e.get('event_location') or ''}".lower()]
+            resp = {"data": {"events": matched, "matched": len(matched), "scanned": len(events),
+                             "truncated": truncated, "query": args.query}}
 
     def render(r):
         data = (r.get("data") or {}) if isinstance(r, dict) else {}
@@ -2141,7 +2176,10 @@ def _collect_since(fetch, start):
                  and (_parse_ts(a.get("published_at")) or start - _dt.timedelta(1)) >= start]
         rows += fresh
         offset += len(page)
-        if not page or not fresh or resp.get("has_more") is False:
+        # has_more is believed only for a short page. A route that reports its
+        # total as this page's own length says has_more=false on every full page
+        # (persons/<id>/articles did), and believing it stopped at 100 silently.
+        if not page or not fresh or (resp.get("has_more") is False and len(page) < SINCE_PAGE):
             return rows, False
         if offset >= SINCE_SCAN_CAP:
             return rows, True
@@ -2495,7 +2533,7 @@ def main():
                        help="Published articles without a query (what IS there, not what matches)")
     p.add_argument("--sort", choices=SORTS, default="new")
     p.add_argument("--window", choices=TIME_WINDOWS, help="only with --sort top")
-    p.add_argument("--tag", help="list one tag's coverage instead (slug from `tags`)")
+    p.add_argument("--tag", help="list one tag's coverage instead (slug from `tags`; --community does not apply)")
     _add_paging(p, 10)
     _add_since(p)
 

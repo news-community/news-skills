@@ -47,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import local_news_api as lna  # noqa: E402  (the shared client, shipped beside this file)
 
 NAME = "cite-check"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 UA = f"{NAME}/{VERSION}"
 lna.UA = UA  # the shared client reads this global on every request
 
@@ -372,8 +372,8 @@ def render(report):
                       (f", published {m['published']}" if m.get("published") else ""))]
             if m["kind"] == "close":
                 src.append(f"The source's words ({int(m['ratio'] * 100)}% word match): “{m['source_wording']}”")
+            src.append(f"Cite: {m['citation']}")
             out.append(fence("\n".join(src)))
-            out.append(f"Cite: {m['citation']}")
             if len(r["matches"]) > 1:
                 out.append(f"Also in {len(r['matches']) - 1} other place(s); `--json` lists them.")
         searched = ", ".join(r["searched"]) or "nothing"
@@ -392,7 +392,7 @@ def render(report):
             cited.append(r["matches"][0]["citation"])
     if cited:
         out += ["", "## Citations", "_Attribution and a backlink, as the newsroom's terms ask._"]
-        out += [f"- {c}" for c in cited]
+        out.append(fence("\n".join(f"- {c}" for c in cited)))
     return "\n".join(out)
 
 
@@ -409,26 +409,49 @@ CLIENT = "python3 scripts/local_news_api.py"
 
 
 def _ranked(steps):
+    """Highest priority first, at most five. Every builder includes a high step, so
+    the first one is high on its own merits; nothing here relabels it."""
     order = ("high", "medium", "low")
-    steps = sorted(steps, key=lambda s: order.index(s[2]))[:5]
-    if steps and steps[0][2] != "high":
-        steps[0] = (steps[0][0], steps[0][1], "high")  # always a clear place to start
-    return steps
+    return sorted(steps, key=lambda s: order.index(s[2]))[:5]
+
+
+def _cmd(text, why, prio):
+    """A step that is a shell command, runnable as printed (a `<placeholder>` marks
+    what you fill in)."""
+    return (text, why, prio, True)
+
+
+def _do(text, why, prio):
+    """A step that is something to do, not a command."""
+    return (text, why, prio, False)
 
 
 def render_next(steps, related):
     out = ["", "## Next steps"]
-    for i, (cmd, why, prio) in enumerate(steps, 1):
-        out += [f"{i}. [{prio}] `{cmd}`", f"   {why}"]
+    for i, (text, why, prio, is_cmd) in enumerate(steps, 1):
+        out += [f"{i}. [{prio}] " + (f"`{text}`" if is_cmd else text), f"   {why}"]
     out += ["", "Related: " + " · ".join(related),
-            f"See also: SKILL.md (beside this script) · {REPO_URL}"]
+            f"See also: SKILL.md (in this skill's folder) · {REPO_URL}"]
     return "\n".join(out)
+
+
+def _carry(args, spec):
+    """The user's own non-default flags, shell-quoted, so a suggested rerun runs the
+    same check on the same newsroom. spec: (dest, flag, default)."""
+    out = []
+    for dest, flag, default in spec:
+        v = getattr(args, dest, default)
+        if v is None or v == default:
+            continue
+        out.append(flag if v is True else f"{flag} {shlex.quote(str(v))}")
+    return (" " + " ".join(out)) if out else ""
 
 
 def json_next(steps):
     """--json keeps stdout the page itself, so the next steps go to stderr as JSON."""
-    print(json.dumps({"next_steps": [{"command": c, "reason": w, "priority": p} for c, w, p in steps]},
-                     ensure_ascii=False), file=sys.stderr)
+    print(json.dumps({"next_steps": [
+        {"command": t if is_cmd else None, "instruction": None if is_cmd else t, "reason": w, "priority": p}
+        for t, w, p, is_cmd in steps]}, ensure_ascii=False), file=sys.stderr)
 
 
 RELATED = ["local-news-api (the full client, shipped here as scripts/local_news_api.py; its `check` shows "
@@ -436,46 +459,76 @@ RELATED = ["local-news-api (the full client, shipped here as scripts/local_news_
            "meeting-prep (a public meeting's calendar entry, notice, coverage and what was said before)"]
 
 
-def next_steps(report, draft_arg):
+CC_FLAGS = (("community", "--community", None), ("min_words", "--min-words", DEFAULT_MIN_WORDS),
+            ("limit", "--limit", 5), ("read", "--read", 3))
+
+
+def _draft_token(draft_arg):
+    """The draft as a shell word. A draft read from stdin cannot be re-read by a
+    suggested command, so it becomes a placeholder for a saved file."""
+    return "<your draft saved as a file>" if draft_arg == "-" else shlex.quote(draft_arg)
+
+
+def next_steps(report, draft_arg, args=None):
     res, steps = report["results"], []
-    draft = shlex.quote(draft_arg)
+    draft = _draft_token(draft_arg)
+    same = _carry(args, CC_FLAGS) if args is not None else ""
     mismatch = [r for r in res if r["matches"] and r["matches"][0].get("speaker_matches_draft") is False]
     if mismatch:
-        steps.append(("open the transcript link under each speaker warning above",
-                      f"{len(mismatch)} quotation(s) are on the record under a different speaker; attributing "
-                      "them unchecked is the error a correction would have to fix", "high"))
+        steps.append(_do("open the transcript link under each speaker warning above",
+                         f"{len(mismatch)} quotation(s) are on the record under a different speaker; attributing "
+                         "them unchecked is the error a correction would have to fix", "high"))
     missing = [r for r in res if r["status"] == "not found"]
     if missing:
         words = " ".join(re.findall(r"[\w']+", missing[0]["quote"])[:8])
-        steps.append((f'{CLIENT} search {shlex.quote(words)} --corpus articles,transcripts,events',
-                      f"{len(missing)} quotation(s) were not found; a looser search, or the primary record, may "
-                      "hold them, and an unsourced quote should not run", "high"))
+        steps.append(_cmd(f"{CLIENT} search {shlex.quote(words)} --corpus articles,transcripts,events",
+                          f"{len(missing)} quotation(s) were not found; a looser search, or the primary record, "
+                          "may hold them, and an unsourced quote should not run", "high"))
     if any("transcripts" in r["not_searched"] for r in res):
-        steps.append((f"{CLIENT} check",
-                      "transcripts were not searched for your key (it needs a subscriber's); see what it "
-                      "reaches", "medium"))
+        steps.append(_cmd(f"{CLIENT} check",
+                          "transcripts were not searched for your key (it needs a subscriber's); see what it "
+                          "reaches", "medium"))
     if report.get("stopped") or report.get("skipped_by_max_quotes"):
         n = report.get("unchecked", 0) + report.get("skipped_by_max_quotes", 0)
-        steps.append((f"python3 scripts/cite_check.py {draft} --max-quotes {len(res) + n}",
-                      f"{n} quotation(s) were not checked", "medium"))
+        why = f"{n} quotation(s) were not checked"
+        if "429" in str(report.get("stopped") or "") or "rate" in str(report.get("stopped") or "").lower():
+            why += "; wait about a minute first, since the newsroom limited the rate, and this re-sends every one"
+        steps.append(_cmd(f"python3 scripts/cite_check.py {draft} --max-quotes {len(res) + n}{same}", why,
+                          "medium"))
     if res and all(r["status"] == "verbatim" for r in res):
-        steps.append(("paste the Citations section into your draft",
-                      "every quotation was found verbatim; attribution and a backlink are what the "
-                      "newsroom's terms ask for", "high"))
-    steps.append((f"python3 scripts/cite_check.py {draft} --out citations.md",
-                  "keep this report beside the draft, to show where each quote came from", "low"))
+        steps.append(_do("paste the Citations section into your draft",
+                         "every quotation was found verbatim; attribution and a backlink are what the "
+                         "newsroom's terms ask for", "high"))
+    if not (args is not None and getattr(args, "out", None)):
+        steps.append(_cmd(f"python3 scripts/cite_check.py {draft} --out citations.md{same}",
+                          "keep this report beside the draft (this runs the searches again)", "low"))
+    if not any(st[2] == "high" for st in steps):
+        steps.append(_do("read each result above before you publish",
+                         "nothing failed outright; the advice under each quotation says what to check", "high"))
     return _ranked(steps)
 
 
-def dry_run_steps(draft_arg):
-    draft = shlex.quote(draft_arg)
-    steps = [(f"python3 scripts/cite_check.py {draft}",
-              "run the check: only the quoted words above are sent, never the draft", "high")]
+def dry_run_steps(draft_arg, n_quotes, args=None):
+    draft = _draft_token(draft_arg)
+    same = _carry(args, CC_FLAGS) if args is not None else ""
+    steps = []
+    if not n_quotes:
+        lower = max(1, (getattr(args, "min_words", DEFAULT_MIN_WORDS) or DEFAULT_MIN_WORDS) - 2)
+        rest = _carry(args, tuple(f for f in CC_FLAGS if f[0] != "min_words")) if args is not None else ""
+        steps.append(_cmd(f"python3 scripts/cite_check.py {draft} --dry-run --min-words {lower}{rest}",
+                          "no quotation was long enough to check; look for shorter ones", "high"))
+        return _ranked(steps)
     if not lna.read_key():
-        steps.insert(0, (f"echo '{lna.KEY_ENV}=cn_...' >> .env.local",
-                         "a check needs your own key; a dry run does not", "high"))
-    steps.append((f"python3 scripts/cite_check.py {draft} --min-words 3",
-                  "include shorter quotations, if a short one matters to the story", "low"))
+        steps.append(_cmd(f"echo '{lna.KEY_ENV}=cn_<your key>' >> .env.local && "
+                          f"python3 scripts/cite_check.py {draft}{same}",
+                          "a check needs your own key; a dry run does not", "high"))
+    else:
+        steps.append(_cmd(f"python3 scripts/cite_check.py {draft}{same}",
+                          "run the check: only the quoted words above are sent, never the draft", "high"))
+    if (getattr(args, "min_words", DEFAULT_MIN_WORDS) if args is not None else DEFAULT_MIN_WORDS) > 3:
+        rest = _carry(args, tuple(f for f in CC_FLAGS if f[0] != "min_words")) if args is not None else ""
+        steps.append(_cmd(f"python3 scripts/cite_check.py {draft} --dry-run --min-words 3{rest}",
+                          "include shorter quotations, if a short one matters to the story", "low"))
     return _ranked(steps)
 
 
@@ -514,21 +567,34 @@ def main(argv=None):
     community = args.community or lna.default_community()
 
     if args.dry_run:
+        shown = quotes[: args.max_quotes]
+        sent = [" ".join(re.findall(r"[\w']+", q["quote"])[:QUERY_WORDS]) for q in shown]
+        steps = dry_run_steps(args.draft, len(quotes), args)
+        if args.json:
+            print(json.dumps({"draft": label, "dry_run": True, "sent_to": f"{lna.api_base()}/search",
+                              "quotations": [{"line": q["line"], "would_send": w, "attributed_to": q["attributed_to"]}
+                                             for q, w in zip(shown, sent)],
+                              "skipped_by_max_quotes": max(0, len(quotes) - args.max_quotes)},
+                             indent=2, ensure_ascii=False))
+            json_next(steps)
+            return
         print(f"{len(quotes)} quotation(s) of {args.min_words}+ words in {label}. Nothing was sent.")
         print(f"Each would be sent to {lna.api_base()}/search as the query below, with your key; "
               "the draft itself is never sent.\n")
-        for i, q in enumerate(quotes[: args.max_quotes], 1):
-            sent = " ".join(re.findall(r"[\w']+", q["quote"])[:QUERY_WORDS])
+        for i, (q, w) in enumerate(zip(shown, sent), 1):
             who = f"  (attributed to {q['attributed_to']})" if q["attributed_to"] else ""
-            print(f"{i}. line {q['line']}: {sent}{who}")
+            print(f"{i}. line {q['line']}: {w}{who}")
         if len(quotes) > args.max_quotes:
             print(f"\n{len(quotes) - args.max_quotes} more would be skipped by --max-quotes.")
-        print(render_next(dry_run_steps(args.draft), RELATED))
+        print(render_next(steps, RELATED))
         return
 
     if not quotes:
-        sys.exit(f"No quotations of {args.min_words}+ words found in {label}. Nothing was sent. "
-                 "Lower --min-words to check shorter ones.")
+        msg = (f"No quotations of {args.min_words}+ words found in {label}. Nothing was sent. "
+               "Lower --min-words to check shorter ones.")
+        if args.json:
+            print(json.dumps({"draft": label, "results": [], "note": msg}, ensure_ascii=False))
+        sys.exit(msg)
     lna.get_api_key()  # exits with the client's own guidance when no key is set
 
     print(f"Checking {min(len(quotes), args.max_quotes)} quotation(s) against {newsroom_name(site)}: "
@@ -548,7 +614,7 @@ def main(argv=None):
               "generated_utc": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M")}
 
     terms = lna.terms_note()
-    steps = next_steps(report, args.draft)
+    steps = next_steps(report, args.draft, args)
     if args.json:
         report["terms"] = terms
         print(json.dumps(report, indent=2, ensure_ascii=False))

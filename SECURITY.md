@@ -12,7 +12,7 @@ quoted words leave your machine as search queries under your key, and the newsro
 someone searched for them. The draft itself is never sent, and `--dry-run` shows exactly what
 would be.
 
-That narrows the realistic problems to three, and they are all listed below rather than left for you
+That narrows the realistic problems to four, and they are all listed below rather than left for you
 to work out.
 
 ## If your API key leaks
@@ -27,7 +27,7 @@ statuses and never the key.
 
 ## Three behaviours worth knowing before you run it
 
-None is a vulnerability. All three are the kind of thing you should be told rather than discover.
+None is a vulnerability. All four are the kind of thing you should be told rather than discover.
 
 **Two environment variables decide where your key is sent.** `NEWS_SITE` chooses the newsroom, and
 the API base is derived from it; `PLATFORM_API_BASE` overrides that base outright, which exists so

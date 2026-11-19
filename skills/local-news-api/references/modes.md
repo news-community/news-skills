@@ -28,7 +28,8 @@ nothing new** rather than at the first older story, because a list ordered by ar
 older story among newer ones; that costs one extra page. It stops after 1,000 stories and says so.
 The day is counted in the newsroom's own time zone, as `digest --date` counts it; `--tz` overrides.
 `browse --since` needs `--sort new` (the default), since no other order lets it know when to stop.
-`browse --tag` needs no key. `person` sends one for both its calls: the coverage route answers
+`browse --tag` needs no key. The tag route takes no community, so `--community` does not narrow
+it: without a key it reads the newsroom at the configured site. `person` sends one for both its calls: the coverage route answers
 without a key only for people with a public page, and a key reaches the rest.
 
 ## `near LAT,LON`

@@ -30,9 +30,10 @@ Next steps:
 - **A priority**, `high`, `medium` or `low`, highest first. The first step is always `high`: start
   there. At most five.
 - **A reason**: why the step matters, not only what it does.
-- **The real value, when the output holds one.** A step names the actual article, transcript,
-  person, clip or tag from the response, so it runs as printed; a `<placeholder>` appears only when
-  the response had no usable value.
+- **A command you can run.** Each step names the script the way you ran it
+  (`python3 scripts/local_news_api.py article ...`) and parses in a shell; a test runs every step
+  through `bash -n`. It carries the actual article, transcript, person, clip or tag from the
+  response, and a `<placeholder>` marks a value you fill in only when the response had none.
 - **Only ids and slugs are copied in.** These steps sit outside the source-material fence below and
   an agent may run them, so a value from the newsroom becomes part of a command only when it is shaped
   like an id or a lowercase slug. Free text from a story (a title, a quote) never does.
