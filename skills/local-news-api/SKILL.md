@@ -19,7 +19,7 @@ compatibility: >-
   modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.6.4"
+  version: "1.7.0"
   author: Communities News, Inc.
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -145,11 +145,13 @@ Access is tiered on the platform side, and your key may not reach everything.
 | `transcript` | **public** | one full meeting transcript with speakers + timestamps, paged with `--offset`. Verified 2026-11-19 (404, not 401, without a key) |
 | `events` | **public** | `GET /calendar`, date-ranged, public since 2026-11-04. Verified 2026-11-19 |
 | `communities` | **any valid key** | the slugs `--community` accepts |
-| `browse` | **any valid key** | the published article list; `--tag` for one beat |
-| `people` / `person` | **any valid key** | speaker directory, and one actor's coverage |
+| `browse` | **any valid key**; `--tag` **public** | the published article list; `--tag` for one beat, `--since` for what is new |
+| `people` / `person` | **any valid key** | speaker directory, and one actor's coverage (`--since` too) |
+| `clips` | **any valid key** (by platform code; unverified with an ordinary key) | the clips cut from an article or a transcript, with quotes. 401 without a key, 2026-11-19 |
+| `near` | **public** | recent stories nearest a point you give. Verified 2026-11-19 |
 | `topics` / `tags` | **public** | beats ranked by coverage, and the subject vocabulary. Verified 2026-09-29 |
 | `rag` | **role-gated** | an external consumer key saw 403 on 2026-07-23; slow (~1-2 min) where allowed |
-| `clip` | **id only** | resolves a known id to its public MP4 URL. You cannot BROWSE clips: see below |
+| `clip` | **id only** | resolves a known id to its public MP4 URL; `clips` finds the ids |
 
 **Some endpoints are not role gates, and no upgrade reaches them.** A set of routes authenticate by
 **cookie session only**: they read the browser's Supabase session rather than the API-key path, so
@@ -162,8 +164,8 @@ derived from the platform's own router, and `check` renders it: `session_auth_on
 request) apart from `requires_role` (a membership you could be granted). Those endpoints return
 **403** with `error: session_auth_only` and a remedy, not a bare 401 that reads like a bad key.
 
-Use `search --corpus transcripts` instead of `transcripts/search`, and get clip ids from `search` or
-an article. **Searching transcripts needs a subscriber's key**; otherwise output says `Not searched:
+Use `search --corpus transcripts` instead of `transcripts/search`, and `clips --article <id>` or
+`clips --transcript <id>` instead of browsing clips. **Searching transcripts needs a subscriber's key**; otherwise output says `Not searched:
 transcripts`, never "nothing found".
 
 **How much weight these rows carry.** They come from two passes with two different keys, and only
@@ -188,6 +190,7 @@ python3 scripts/local_news_api.py check                               # what doe
 python3 scripts/local_news_api.py digest                              # recent stories (no key)
 python3 scripts/local_news_api.py digest --date today                 # one day's stories, a summary each (no key)
 python3 scripts/local_news_api.py browse --sort new                   # what has been PUBLISHED (no query)
+python3 scripts/local_news_api.py browse --tag government --since 2026-11-16  # a beat's stories since a day
 python3 scripts/local_news_api.py search "port of alaska settlement"  # --corpus, --since, --until
 python3 scripts/local_news_api.py angles "port of alaska" --intent track  # discovery: fix 2 Ws, expand the rest
 python3 scripts/local_news_api.py brief "port of alaska"             # research brief before writing (--out FILE)
@@ -195,7 +198,9 @@ python3 scripts/local_news_api.py article <id | slug | url>           # full art
 python3 scripts/local_news_api.py transcript <source-id>              # meeting transcript
 python3 scripts/local_news_api.py events                              # what is coming UP (next 30 days)
 python3 scripts/local_news_api.py rag "public comment deadlines"      # answer + citations (not with a read-only key)
+python3 scripts/local_news_api.py clips --article <id>                # the clips from an article (or --transcript <id>)
 python3 scripts/local_news_api.py clip <clip-id>                      # resolve a known clip id to its MP4 URL
+python3 scripts/local_news_api.py near 61.22,-149.90 --radius 25      # recent stories nearest a point (no key)
 python3 scripts/local_news_api.py communities                         # slugs valid for --community
 python3 scripts/local_news_api.py people "dunleavy"                   # the Who axis: named speakers
 python3 scripts/local_news_api.py person <person-id>                  # one actor + the coverage they appear in
@@ -248,18 +253,10 @@ three of something when there are ninety.
 Add `--json` for raw responses, `--community <slug>` to target a community other than `alaska-news`
 (run `communities` to see which slugs exist).
 
-**The When axis: `--since` / `--until`.** `search` and `angles` both take `--since YYYY-MM-DD` and
-`--until YYYY-MM-DD`, which map to the API's `date_from` / `date_to` on the articles corpus. This is
-the only one of the five Ws the server can filter on, and it is the axis the `angles` intents talk
-about holding or expanding, so `--intent precedent --until 2020-01-01` is how you actually ask the
-question that intent describes. Result lines carry the date for the same reason: you cannot check
-the two-axis relevance rule below against results whose dates are hidden.
-
-**`events` is forward-looking.** It reads `GET /calendar`, whose window starts now and runs 30 days
-(`--days` to change it, `--type meeting|public_notice|community_event|class` to narrow), so it never
-lists a past meeting as upcoming. To search events by relevance across all time, including past ones,
-use `search "<q>" --corpus events`. `/calendar` has no full-text parameter, so a query argument to
-`events` filters the window client-side on title and location.
+**Dates, `events`, `near` and `clips`.** `search` and `angles` filter on the server with `--since` /
+`--until`; `browse` and `person` take `--since` and filter in the client. `events` only looks
+forward, `near` covers only the newsroom's newest stories, and neither looks anything up by place
+name. How each works and where it stops: [`references/modes.md`](references/modes.md).
 
 ---
 
@@ -305,7 +302,7 @@ phrase with no matching published story behind it.
   (each carries a verbatim excerpt and a url), never its synthesized paragraph: the paragraph is a
   summary of someone else's reporting and is not itself attributable.
 - **You cannot browse clips or use `/transcripts/search` with any key.** Both are cookie-session
-  endpoints, not role gates. See the auth section above.
+  endpoints, not role gates; `clips` and `search --corpus transcripts` are the keyed routes instead.
 - **`angles` and `brief`** each make one `/search` call, so any key that reaches `search` reaches
   them (transcripts as above). `angles`' suggested `rag` follow-ups inherit rag's role limit.
 - **Rate limits.** 300 reads/min per user (and 180 writes/min, which nothing here uses). A 429 is a

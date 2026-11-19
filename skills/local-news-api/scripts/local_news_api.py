@@ -89,7 +89,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.6.4"
+UA = "local-news-api/1.7.0"
 
 
 def site():
@@ -131,7 +131,7 @@ def read_key():
 
 
 RELATED_MODES = ("digest · browse · search · angles · brief · article · transcript · events · people · "
-                 "person · topics · tags · rag · clip · communities · check")
+                 "person · topics · tags · rag · clip · clips · near · communities · check")
 def see_also():
     host = urllib.parse.urlparse(site()).netloc or site()
     return f"SKILL.md  ·  full API: {host}/docs/api  ·  machine spec: {host}/api/v1/openapi.json"
@@ -538,6 +538,15 @@ def _add_paging(p, default_limit):
     p.add_argument("--offset", type=int, default=0, help="skip this many (paging)")
 
 
+def _add_since(p):
+    """--since for list modes whose endpoint takes no date: read newest-first and
+    stop at the first page with nothing new. Days in the newsroom's own zone."""
+    p.add_argument("--since", metavar="YYYY-MM-DD",
+                   help="only what was published on/after this day (or today, yesterday)")
+    p.add_argument("--tz", metavar="AREA/CITY",
+                   help="the zone --since days are counted in (default: the newsroom's)")
+
+
 def _add_date_range(p):
     """The When axis. /search grew date_from/date_to on 2026-08-14, which is the
     only one of the five Ws the server can filter on, and the axis `angles`
@@ -924,15 +933,15 @@ def _day_zone(explicit, reported):
                 "available on this machine (no tz database; `pip install tzdata` adds one).")
 
 
-def _parse_day(text, tz):
-    """--date as a calendar date. `today` and `yesterday` are in the day's zone."""
+def _parse_day(text, tz, flag="--date"):
+    """A day flag as a calendar date. `today` and `yesterday` are in the day's zone."""
     today = _dt.datetime.now(tz).date()
     if text in ("today", "yesterday"):
         return today - _dt.timedelta(days=text == "yesterday")
     try:
         return _dt.date.fromisoformat(text)
     except ValueError:
-        sys.exit(f"--date takes YYYY-MM-DD, today or yesterday, not {text!r}.")
+        sys.exit(f"{flag} takes YYYY-MM-DD, today or yesterday, not {text!r}.")
 
 
 def _next_page_params(resp):
@@ -1525,6 +1534,153 @@ def cmd_clip(args):
     print(f"\n---\n{terms_note()}")
 
 
+def cmd_clips(args):
+    """The clips cut from one article's sources or one transcript, each with the
+    quote, who said it, where it starts and a public download URL. Keyed.
+
+    `GET /clips` (browse) refuses every API key: it reads a browser session. So a
+    script could download any clip and could not ask which existed. The platform
+    added these two indexes on 2026-09-10 to close that gap. Both take a key and
+    check only that the key covers the community (no role), per the platform's
+    code; both answer 401 without one (2026-11-19). Reach with an ORDINARY key is
+    unverified (references/verification.md)."""
+    if bool(args.article) == bool(args.transcript):
+        sys.exit("clips takes exactly one of --article <id> or --transcript <source id>.")
+    if args.article:
+        path, what = f"/articles/{_seg(args.article, 'article id')}/clips", f"article {args.article}"
+    else:
+        path, what = f"/transcript/{_seg(args.transcript, 'source id')}/clips", f"transcript {args.transcript}"
+    resp = _guided(lambda: api_request("GET", path, {"limit": args.limit, "offset": args.offset}))
+
+    def render(r):
+        rows = r.get("data") if isinstance(r, dict) else None
+        if not isinstance(rows, list):
+            return json.dumps(r, indent=2, ensure_ascii=False)
+        out = [f"# clips: {what}"]
+        if not rows:
+            out.append("(no completed clips here)")
+        for c in rows[: args.limit]:
+            if not isinstance(c, dict):
+                continue
+            when = _mmss(c.get("start_time"))
+            dur = c.get("duration_seconds")
+            head = f"- [{when}] {c.get('speaker') or '?'}"
+            if isinstance(dur, (int, float)):
+                head += f"  ({dur:.0f}s quote; the file runs a few seconds longer)"
+            out.append(head + (f"  [{c.get('id')}]" if c.get("id") else ""))
+            if c.get("verbatim_excerpt"):
+                out.append(f'    "{str(c["verbatim_excerpt"]).strip()[:240]}"')
+            url = c.get("download_url")
+            if url:
+                out.append(f"    {urllib.parse.urljoin(site() + '/', url)}")
+        page = _paged(r)
+        if page:
+            out.append(f"\n{page}")
+        return "\n".join(out)
+
+    _emit(resp, args, render, mode="clips")
+
+
+def _parse_point(text):
+    """`lat,lon` in decimal degrees, or exit before any request."""
+    parts = [x.strip() for x in str(text).split(",")]
+    try:
+        if len(parts) != 2:
+            raise ValueError
+        lat, lon = float(parts[0]), float(parts[1])
+    except ValueError:
+        sys.exit(f"near takes LAT,LON in decimal degrees (for example 61.22,-149.90), not {text!r}.\n"
+                 "  A latitude south of the equator starts with '-': write `near -- -33.87,151.21`.")
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        sys.exit(f"{text!r} is off the globe: latitude runs -90 to 90, longitude -180 to 180.")
+    return lat, lon
+
+
+def _miles(lat1, lon1, lat2, lon2):
+    """Great-circle distance in miles (haversine; the platform measures in miles too)."""
+    import math
+    r = 3958.8
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def _is_statewide(a):
+    """A story placed on its newsroom's whole area rather than on a place in it.
+
+    The pool gives every story coordinates, and a story about the whole newsroom
+    area sits on one central point whose `location` is the newsroom's `place` itself
+    (28 of 200 on 2026-11-19). Ranked by distance, that would call a statewide story
+    local to whoever lives near the centre, so it is listed apart instead."""
+    loc, place = (a.get("location") or "").strip().lower(), (a.get("place") or "").strip().lower()
+    return bool(place) and loc == place
+
+
+def cmd_near(args):
+    """Recent stories nearest a point you give, from the public Nearby pool.
+
+    `GET /feed/nearby` (public) is the newsroom's newest published stories, each
+    with coordinates, unsorted: the site sorts it in the reader's browser so the
+    reader's position never reaches the server. This does the same, here. It
+    takes coordinates and never a place name: resolving a name through the
+    platform's `/places` would bill the newsroom a geocoding lookup per run.
+    `/articles?sort=nearby` was not used: with a key it also folds in the key
+    owner's saved locations, so its answer would depend on whose key it is."""
+    lat, lon = _parse_point(args.point)
+    resp = _guided(lambda: api_request("GET", "/feed/nearby", {"community": args.community}, public=True))
+
+    def render(r):
+        rows = r.get("data") if isinstance(r, dict) else None
+        if not isinstance(rows, list):
+            return json.dumps(r, indent=2, ensure_ascii=False)
+        located, statewide, unplaced = [], [], 0
+        for a in rows:
+            if not isinstance(a, dict):
+                continue
+            if _is_statewide(a):
+                statewide.append(a)
+                continue
+            if not isinstance(a.get("latitude"), (int, float)) or not isinstance(a.get("longitude"), (int, float)):
+                unplaced += 1
+                continue
+            located.append((_miles(lat, lon, a["latitude"], a["longitude"]), a))
+        located.sort(key=lambda x: x[0])
+        if args.radius is not None:
+            located = [x for x in located if x[0] <= args.radius]
+        dates = sorted((a.get("published_at") or "")[:10] for a in rows
+                       if isinstance(a, dict) and a.get("published_at"))
+        span = f", published {dates[0]} to {dates[-1]}" if dates else ""
+        out = [f"# near {lat:.4f},{lon:.4f}"
+               + (f", within {args.radius:g} mi" if args.radius is not None else ""),
+               f"(from the newsroom's {len(rows)} newest stories{span}; older stories are not in this pool)"]
+        start = max(0, args.offset)
+        shown = located[start:start + args.limit]
+        if not shown:
+            out.append("(no placed story in range; widen --radius, or use `search` for older coverage)")
+        for miles, a in shown:
+            when = (a.get("published_at") or "")[:10]
+            out.append(f"- {miles:,.1f} mi  {str(a.get('title') or '(untitled)').strip()[:120]}"
+                       + (f"  ({a.get('location')})" if a.get("location") else "")
+                       + (f"  {when}" if when else "")
+                       + (f"  [{a.get('id') or a.get('slug')}]" if (a.get("id") or a.get("slug")) else ""))
+        if shown and start + len(shown) < len(located):
+            out.append(f"\nshowing {start + 1}-{start + len(shown)} of {len(located)}  "
+                       f"(more: --offset {start + len(shown)})")
+        if statewide:
+            out.append(f"\n{len(statewide)} statewide "
+                       f"{'story covers' if len(statewide) == 1 else 'stories cover'} the whole area, "
+                       "not a place in it, so distance does not apply:")
+            out += _article_lines(statewide, args.limit)
+            if len(statewide) > args.limit:
+                out.append(f"  (showing {args.limit} of {len(statewide)}; raise --limit for the rest)")
+        if unplaced:
+            out.append(f"({unplaced} with no coordinates left out)")
+        return "\n".join(out)
+
+    _emit(resp, args, render, mode="near")
+
+
 def cmd_communities(args):
     """List the community slugs `--community` accepts.
 
@@ -1638,9 +1794,21 @@ def cmd_person(args):
     in this piece" are different claims and only one of them is quotable."""
     pid = _seg(args.person_id, "person id")
     who = _guided(lambda: api_request("GET", f"/persons/{pid}"))
-    cov = _guided(lambda: api_request(
-        "GET", f"/persons/{pid}/articles",
-        {"limit": args.limit, "offset": args.offset}))
+    # /persons/<id>/articles answers without a key (platform: requireAuth false),
+    # so only the record call carries one.
+    def coverage(off, lim):
+        return _guided(lambda: api_request(
+            "GET", f"/persons/{pid}/articles", {"limit": lim, "offset": off}, public=True))
+
+    since_out = None
+    if getattr(args, "since", None):
+        begin, day, _zone, tz_note = _since_start(args)
+        rows, extra = _collect_since(coverage, begin)
+        cov = {"data": rows, "since": day.isoformat(), "truncated": extra} if rows is not None else extra
+        if rows is not None:
+            since_out = _since_block(rows, extra, day, args, tz_note)
+    else:
+        cov = coverage(args.offset, args.limit)
     if args.json:
         _print_json({"person": who, "articles": cov}, indent=2)
         return
@@ -1662,8 +1830,12 @@ def cmd_person(args):
         if p.get(field):
             out.append(f"{field}: {str(p[field]).strip()[:400]}")
     rows = cov.get("data") if isinstance(cov, dict) else None
-    out.append(f"\n## appears in ({(cov or {}).get('total', len(rows or []))})")
-    out += _article_lines(rows, args.limit) or ["(no linked coverage)"]
+    if since_out is not None:
+        out.append(f"\n## appears in, {since_out[0]}")
+        out += since_out[1:]
+    else:
+        out.append(f"\n## appears in ({(cov or {}).get('total', len(rows or []))})")
+        out += _article_lines(rows, args.limit) or ["(no linked coverage)"]
     if rows and not any((r or {}).get("verbatim_excerpt") for r in rows if isinstance(r, dict)):
         out.append("\n(No row here carries a verbatim excerpt, so these are structural links "
                    "rather than matched quotes. Open one and confirm before writing that this "
@@ -1819,6 +1991,60 @@ SORTS = ("hot", "new", "timeline", "top", "popular", "alphabetical")
 TIME_WINDOWS = ("today", "week", "month", "all")
 
 
+SINCE_PAGE = 100
+SINCE_SCAN_CAP = 1000   # CHOSEN: ten pages, far past a beat's week; a guard, and said when hit
+
+
+def _since_start(args):
+    """(aware start of the --since day, the zone's name, a note) in the newsroom's
+    own zone, as `digest --date` counts days, so "since Monday" is the reader's
+    Monday and not UTC's."""
+    try:
+        reported = _feed_zone(args.community)
+    except ApiError:
+        reported = None
+    tz, name, note = _day_zone(getattr(args, "tz", None), reported)
+    day = _parse_day(args.since, tz, flag="--since")
+    return _dt.datetime.combine(day, _dt.time.min, tz), day, name, note
+
+
+def _collect_since(fetch, start):
+    """Every row published on or after `start`, from a newest-first list endpoint
+    that takes no date. Pages until a page holds nothing new (robust to a list
+    ordered by arrival rather than strictly by publication, where one older row
+    can sit among newer ones), the list ends, or SINCE_SCAN_CAP rows were read.
+    Returns (rows, truncated), or (None, resp) when the shape is not a list."""
+    rows, offset = [], 0
+    while True:
+        resp = fetch(offset, SINCE_PAGE)
+        page = resp.get("data") if isinstance(resp, dict) else None
+        if not isinstance(page, list):
+            return None, resp
+        fresh = [a for a in page if isinstance(a, dict)
+                 and (_parse_ts(a.get("published_at")) or start - _dt.timedelta(1)) >= start]
+        rows += fresh
+        offset += len(page)
+        if not page or not fresh or resp.get("has_more") is False:
+            return rows, False
+        if offset >= SINCE_SCAN_CAP:
+            return rows, True
+
+
+def _since_block(rows, truncated, day, args, tz_note):
+    """The rendered list for --since, with the count it found and what it left out."""
+    start = max(0, args.offset)
+    shown = rows[start:start + args.limit]
+    out = [f"{len(rows)} since {day.isoformat()}"
+           + (f" (stopped after scanning {SINCE_SCAN_CAP}; there may be more)" if truncated else "")]
+    out += _article_lines(shown, args.limit) or ["(nothing published since then)"]
+    if shown and start + len(shown) < len(rows):
+        out.append(f"\nshowing {start + 1}-{start + len(shown)} of {len(rows)}  "
+                   f"(more: --offset {start + len(shown)})")
+    if tz_note:
+        out.append(tz_note)
+    return out
+
+
 def cmd_browse(args):
     """The published article list, without a search query.
 
@@ -1829,15 +2055,35 @@ def cmd_browse(args):
     GET /feed is deliberately NOT wrapped: it returns byte-identical results to
     `/articles?sort=new` (checked 2026-09-09) and accepts no community parameter,
     so for a consumer targeting a community it is the same mode with less reach."""
+    since = getattr(args, "since", None)
+    if since and args.sort != "new":
+        sys.exit(f"--since needs --sort new (the default): it reads newest-first and stops at the "
+                 f"first page with nothing new, which a {args.sort!r} order cannot promise.")
+    # /tags/<slug>/articles answers without a key (platform: requireAuth false;
+    # 200 keyless on 2026-11-19), so it gets none; /articles still needs one.
+    public = bool(args.tag)
     if args.tag:
         path, params = f"/tags/{_seg(args.tag, 'tag')}/articles", {"limit": args.limit, "offset": args.offset}
+        if since:
+            params["sort"] = "new"
     else:
         path = "/articles"
         params = {"community": args.community, "limit": args.limit,
                   "offset": args.offset, "sort": args.sort}
         if args.sort == "top" and args.window:
             params["t"] = args.window
-    resp = _guided(lambda: api_request("GET", path, params))
+    if since:
+        begin, day, _zone, tz_note = _since_start(args)
+        rows, extra = _collect_since(lambda off, lim: _guided(lambda: api_request(
+            "GET", path, dict(params, limit=lim, offset=off), public=public)), begin)
+        if rows is None:
+            _emit(extra, args, None, mode="browse")
+            return
+        head = f"# browse: tag {args.tag}" if args.tag else "# browse: new"
+        _emit({"data": rows, "since": day.isoformat(), "truncated": extra}, args,
+              lambda r: "\n".join([head] + _since_block(rows, extra, day, args, tz_note)), mode="browse")
+        return
+    resp = _guided(lambda: api_request("GET", path, params, public=public))
 
     def render(r):
         rows = r.get("data") if isinstance(r, dict) else None
@@ -2115,6 +2361,7 @@ def main():
                        help="One person, plus every article quoting them (with the quote)")
     p.add_argument("person_id", help="person id (from `people`)")
     _add_paging(p, 10)
+    _add_since(p)
 
     p = sub.add_parser("topics", parents=[common],
                        help="The beats, ranked by published articles (public, no key)")
@@ -2132,6 +2379,7 @@ def main():
     p.add_argument("--window", choices=TIME_WINDOWS, help="only with --sort top")
     p.add_argument("--tag", help="list one tag's coverage instead (slug from `tags`)")
     _add_paging(p, 10)
+    _add_since(p)
 
     p = sub.add_parser("article", parents=[common], help="Full article by URL/slug (public) or id (keyed)")
     p.add_argument("ref", help="article id, slug, or full URL")
@@ -2152,14 +2400,28 @@ def main():
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=8, help="citations to render (default 8)")
 
-    p = sub.add_parser("clip", parents=[common], help="Stream a KNOWN clip id (browse needs editor role)")
+    p = sub.add_parser("clip", parents=[common], help="Stream a KNOWN clip id (find ids with `clips`)")
     p.add_argument("clip_id")
+
+    p = sub.add_parser("clips", parents=[common],
+                       help="The clips cut from one article or one transcript, with quotes and URLs")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--article", help="article id")
+    g.add_argument("--transcript", help="transcript (source) id")
+    _add_paging(p, 20)
+
+    p = sub.add_parser("near", parents=[common],
+                       help="Recent stories nearest LAT,LON, from the public Nearby pool (no key)")
+    p.add_argument("point", metavar="LAT,LON", help="decimal degrees, e.g. 61.22,-149.90")
+    p.add_argument("--radius", type=float, metavar="MILES", help="only stories within this many miles")
+    _add_paging(p, 10)
 
     args = ap.parse_args()
     {
         "digest": cmd_digest, "check": cmd_check, "search": cmd_search, "angles": cmd_angles, "brief": cmd_brief,
         "article": cmd_article, "transcript": cmd_transcript, "events": cmd_events,
-        "rag": cmd_rag, "clip": cmd_clip, "communities": cmd_communities,
+        "rag": cmd_rag, "clip": cmd_clip, "clips": cmd_clips, "near": cmd_near,
+        "communities": cmd_communities,
         "people": cmd_people, "person": cmd_person, "topics": cmd_topics,
         "tags": cmd_tags, "browse": cmd_browse,
     }[args.mode](args)

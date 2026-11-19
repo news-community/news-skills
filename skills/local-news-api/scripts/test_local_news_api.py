@@ -2357,3 +2357,188 @@ class TestOfflineTwinsOfTheLiveTests:
         with pytest.raises(SystemExit) as e:
             ad.cmd_search(_Args(query="test"))
         assert "different service" in str(e.value)
+
+
+# --- 1.7.0: clips, near, and --since ----------------------------------------------
+
+def _clip(i, speaker="Mayor", excerpt="We will fund the port."):
+    return {"id": f"c{i}", "source_id": "s1", "speaker": speaker, "verbatim_excerpt": excerpt,
+            "start_time": 125 + i, "end_time": 140 + i, "duration_seconds": 15,
+            "download_url": f"/api/v1/clips/c{i}/stream", "created_at": "2026-11-01T00:00:00Z"}
+
+
+class TestClipsMode:
+    """GET /clips refuses every key, so clip ids were reachable only by accident.
+    The platform added two keyed indexes on 2026-09-10; this mode reads them."""
+
+    @pytest.mark.parametrize("flag,path", [("article", "/articles/a1/clips"),
+                                           ("transcript", "/transcript/s1/clips")])
+    def test_reads_the_right_index_with_the_key_and_pages(self, monkeypatch, capsys, flag, path):
+        _no_terms(monkeypatch)
+        rec = _Rec(lambda p, q: {"data": [_clip(1), _clip(2)], "count": 2, "offset": 0,
+                                 "limit": 2, "has_more": True, "total": 9})
+        monkeypatch.setattr(ad, "api_request", rec)
+        ref = {"article": "a1", "transcript": "s1"}[flag]
+        ad.cmd_clips(_Args(article=ref if flag == "article" else None,
+                           transcript=ref if flag == "transcript" else None, limit=2, offset=0))
+        call = rec.calls[0]
+        assert call["path"] == path and call["public"] is False
+        assert call["params"] == {"limit": 2, "offset": 0}
+        out = capsys.readouterr().out
+        assert "We will fund the port." in out and "Mayor" in out
+        assert "/api/v1/clips/c1/stream" in out
+        assert "of 9" in out and "--offset 2" in out
+
+    def test_needs_exactly_one_of_article_or_transcript(self):
+        r = run("clips")
+        assert r.returncode != 0 and "--article" in (r.stdout + r.stderr)
+
+    def test_an_unsafe_id_is_refused(self, monkeypatch):
+        rec = _Rec(lambda p, q: {})
+        monkeypatch.setattr(ad, "api_request", rec)
+        with pytest.raises(SystemExit):
+            ad.cmd_clips(_Args(article="../../admin", transcript=None))
+        assert rec.calls == []
+
+
+def _story(i, lat, lon, location, place="Alaska", when="2026-11-18T12:00:00+00:00"):
+    return {"id": f"a{i}", "title": f"Story {i}", "slug": f"s{i}", "latitude": lat, "longitude": lon,
+            "location": location, "place": place, "published_at": when}
+
+
+class TestNearMode:
+    POOL = [
+        _story(1, 64.84, -147.72, "Fairbanks, Alaska"),
+        _story(2, 61.218, -149.9, "Anchorage, Alaska", when="2026-11-17T08:00:00+00:00"),
+        _story(3, 63.589, -154.493, "Alaska"),            # statewide: no specific place
+        _story(4, 61.58, -149.44, "Wasilla, Alaska"),
+    ]
+
+    def _run(self, monkeypatch, capsys, **kw):
+        _no_terms(monkeypatch)
+        rec = _Rec(lambda p, q: {"data": list(self.POOL), "count": 4, "offset": 0, "limit": 200,
+                                 "has_more": False})
+        monkeypatch.setattr(ad, "api_request", rec)
+        ad.cmd_near(_Args(**dict({"point": "61.22,-149.90", "radius": None, "limit": 10}, **kw)))
+        return rec, capsys.readouterr().out
+
+    def test_public_and_sorted_by_distance(self, monkeypatch, capsys):
+        rec, out = self._run(monkeypatch, capsys)
+        assert rec.calls[0]["path"] == "/feed/nearby" and rec.calls[0]["public"] is True
+        assert out.index("Story 2") < out.index("Story 4") < out.index("Story 1")
+        assert " mi" in out
+
+    def test_statewide_stories_are_not_ranked_as_near(self, monkeypatch, capsys):
+        """14% of the live pool sat on one statewide point labelled only with the
+        state. Ranking it by distance would call a statewide story local to
+        whoever lives near the state's centre."""
+        _, out = self._run(monkeypatch, capsys, point="63.59,-154.49")
+        ranked = out.split("statewide", 1)[0]
+        assert "Story 3" not in ranked
+        assert "1 statewide" in out
+
+    def test_radius_filters(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys, radius=50)
+        assert "Story 2" in out and "Story 4" in out and "Story 1" not in out
+
+    def test_it_says_how_far_back_the_pool_reaches(self, monkeypatch, capsys):
+        _, out = self._run(monkeypatch, capsys)
+        assert "2026-11-17" in out and "4 newest" in out
+
+    @pytest.mark.parametrize("bad", ["abc", "91,0", "0,181", "61.2", "61.2,-149.9,3"])
+    def test_bad_coordinates_are_refused(self, monkeypatch, bad):
+        rec = _Rec(lambda p, q: {})
+        monkeypatch.setattr(ad, "api_request", rec)
+        with pytest.raises(SystemExit):
+            ad.cmd_near(_Args(point=bad, radius=None, limit=5))
+        assert rec.calls == []
+
+
+class TestSinceFilter:
+    """--since on browse and person: what is new on a beat or about a person since a
+    day. The routes take no date, so the client pages newest-first and stops at
+    the first page with nothing on or after the day."""
+
+    def _pages(self, dates, page_size=3):
+        rows = [{"id": f"a{i}", "title": f"Story {i}", "published_at": d} for i, d in enumerate(dates)]
+
+        def answer(p, q):
+            off, lim = q.get("offset", 0), q.get("limit", page_size)
+            lim = min(lim, page_size)
+            page = rows[off:off + lim]
+            return {"data": page, "count": len(page), "offset": off, "limit": lim,
+                    "has_more": off + lim < len(rows)}
+        return answer
+
+    DATES = ["2026-11-18T20:00:00+00:00", "2026-11-17T20:00:00+00:00", "2026-11-16T20:00:00+00:00",
+             "2026-11-15T20:00:00+00:00", "2026-11-09T20:00:00+00:00", "2026-11-08T20:00:00+00:00",
+             "2026-11-07T20:00:00+00:00", "2026-11-06T20:00:00+00:00"]
+
+    def _since(self, monkeypatch, cmd, **kw):
+        _no_terms(monkeypatch)
+        monkeypatch.setattr(ad, "_feed_zone", lambda community: "UTC")
+        rec = _Rec(self._pages(self.DATES))
+        monkeypatch.setattr(ad, "api_request", rec)
+        cmd(_Args(**dict({"since": "2026-11-15", "tz": None, "limit": 20}, **kw)))
+        return rec
+
+    def test_browse_since_returns_only_the_new_rows_across_pages(self, monkeypatch, capsys):
+        rec = self._since(monkeypatch, ad.cmd_browse, sort="new")
+        out = capsys.readouterr().out
+        for i in range(4):
+            assert f"Story {i}" in out
+        for i in range(4, 8):
+            assert f"Story {i}" not in out
+        assert "4 since 2026-11-15" in out
+        # Pages of 3: [18,17,16] all new, [15,09,08] partly new, [07,06] nothing new.
+        # It stops at that third page rather than at the first old row, so a list
+        # ordered by arrival cannot hide a newer story behind an older one.
+        assert len(rec.calls) == 3, "it should stop at the first page with nothing new"
+
+    def test_browse_tag_since_is_public(self, monkeypatch, capsys):
+        rec = self._since(monkeypatch, ad.cmd_browse, sort="new", tag="government")
+        assert rec.calls and all(c["public"] for c in rec.calls)
+        assert rec.calls[0]["path"] == "/tags/government/articles"
+
+    def test_browse_since_refuses_an_order_it_cannot_stop_on(self, monkeypatch):
+        rec = _Rec(lambda p, q: {})
+        monkeypatch.setattr(ad, "api_request", rec)
+        with pytest.raises(SystemExit) as e:
+            ad.cmd_browse(_Args(since="2026-11-15", tz=None, sort="hot"))
+        assert "--sort new" in str(e.value) and rec.calls == []
+
+    def test_person_since(self, monkeypatch, capsys):
+        _no_terms(monkeypatch)
+        monkeypatch.setattr(ad, "_feed_zone", lambda community: "UTC")
+        cov = self._pages(self.DATES)
+
+        def answer(p, q):
+            if p.endswith("/articles"):
+                return cov(p, q)
+            return {"data": {"speaker": {"display_name": "Pat Example"}}}
+        rec = _Rec(answer)
+        monkeypatch.setattr(ad, "api_request", rec)
+        ad.cmd_person(_Args(person_id="p1", since="2026-11-15", tz=None, limit=20))
+        out = capsys.readouterr().out
+        assert "Story 3" in out and "Story 4" not in out
+        art = [c for c in rec.calls if c["path"].endswith("/articles")]
+        assert art and all(c["public"] for c in art), "persons/<id>/articles is public"
+
+    def test_since_takes_today_and_yesterday_and_names_its_own_flag(self, monkeypatch):
+        with pytest.raises(SystemExit) as e:
+            ad._parse_day("monday", _dt_utc(), flag="--since")
+        assert "--since" in str(e.value)
+
+
+def _dt_utc():
+    import datetime as dt
+    return dt.timezone.utc
+
+
+class TestNearSaysWhatItHid:
+    def test_statewide_list_names_its_cut(self, monkeypatch, capsys):
+        _no_terms(monkeypatch)
+        pool = [_story(i, 63.589, -154.493, "Alaska") for i in range(5)]
+        monkeypatch.setattr(ad, "api_request", _Rec(lambda p, q: {"data": pool}))
+        ad.cmd_near(_Args(point="61.2,-149.9", radius=None, limit=2))
+        assert "showing 2 of 5" in capsys.readouterr().out

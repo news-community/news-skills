@@ -6,6 +6,28 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## 1.7.0 - 2026-11-19
+
+### Added
+
+- **`clips --article <id>` / `clips --transcript <id>`**: the clips cut from an article's sources or
+  from one meeting, each with its quote, speaker, start time and a public download URL. `GET /clips`
+  refuses every key, so until now a clip id could only be found by accident. Needs a key: both
+  routes answer 401 without one, and the platform's code checks only the key's community. **Not yet
+  run with an ordinary key.**
+- **`near LAT,LON`**: recent stories nearest a point, from the public Nearby pool, with miles and an
+  optional `--radius`. No key. It takes coordinates and never a place name, so it costs the newsroom
+  no geocoding; statewide stories are listed apart rather than ranked by distance; and it says how far
+  back its pool reaches (two days on 2026-11-19).
+- **`--since` on `browse` and `person`**: only what was published on or after a day, counted in the
+  newsroom's own time zone. The routes take no date, so it reads newest-first and stops at the first
+  page with nothing new.
+
+### Fixed
+
+- **`browse --tag` and the coverage half of `person` no longer send the key.** Both routes are
+  public (200 and 404 without a key on 2026-11-19); the person record still needs one.
+
 ## 1.6.4 - 2026-11-19
 
 From a code review of 1.6.3. Each fix landed with a test shown failing on 1.6.3 first.

@@ -36,3 +36,15 @@ be interpreted later.
 That is authoritative for *your* key in a way no table in a document can be, and it is why the
 client stopped carrying a hand-written list of unreachable endpoints. Prefer running it over
 trusting any table, including the one in `SKILL.md`.
+
+## 2026-11-19: what was checked without a key, for 1.6.4 and 1.7.0
+
+No key was available, so these are keyless checks plus the platform's code, and the rows they
+support say so.
+
+- **Public, verified keyless:** `/calendar` (200 with events), `/transcript/<id>/chunks` (404, not
+  401, for an unknown id), `/tags/<slug>/articles` (200), `/persons/<id>/articles` (404, not 401) and
+  `/feed/nearby` (200, 200 stories, every one with coordinates).
+- **Keyed, verified keyless:** `/articles/<id>/clips` and `/transcript/<id>/clips` answer 401
+  without a key. The platform's code checks only that the key covers the community. **Reach with an
+  ordinary key is unverified**; the first person to run `clips` with one should record it here.

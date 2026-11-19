@@ -31,7 +31,7 @@ write back to the platform. On your own machine it writes one file, and only whe
 
 | Skill | What it does |
 |-------|--------------|
-| [`skills/local-news-api`](skills/local-news-api/SKILL.md) | **Local News API**: a read-only client for a newsroom's public API (for example `https://alaskanews.com/api/v1`). 16 modes: `check` (what your key reaches), `digest` and `browse` (what's published; `digest --date` for one day's stories, a summary each), `search` and `angles` (five-Ws discovery), `brief` (a research brief before writing), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clip`, and `communities`. |
+| [`skills/local-news-api`](skills/local-news-api/SKILL.md) | **Local News API**: a read-only client for a newsroom's public API (for example `https://alaskanews.com/api/v1`). 18 modes: `check` (what your key reaches), `digest` and `browse` (what's published; `digest --date` for one day's stories, a summary each; `browse --since` for what is new on a beat), `near` (recent stories nearest a point you give), `search` and `angles` (five-Ws discovery), `brief` (a research brief before writing), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clips` (the quotable clips from an article or a meeting) and `clip`, and `communities`. |
 
 ## Install
 
