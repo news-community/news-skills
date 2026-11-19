@@ -2735,3 +2735,115 @@ class TestCommandsRunAsPrinted:
         today = dt.datetime.now(dt.timezone.utc).date()
         assert ad._parse_day("today", dt.timezone.utc, flag="--since") == today
         assert ad._parse_day("yesterday", dt.timezone.utc, flag="--since") == today - dt.timedelta(days=1)
+
+
+class TestSecondReviewOfTheClient:
+    """From a second code review of 1.8.1. Each was shown failing on 1.8.1 first."""
+
+    HEARING = {"id": "e1", "event_title": "North Pole hearing", "event_type": "meeting",
+               "event_date": "2026-11-19T00:30:00+00:00", "is_all_day": False, "display_timezone": None}
+    ALL_DAY = {"id": "e2", "event_title": "Comments close", "event_type": "public_notice",
+               "event_date": "2026-11-20T09:00:00+00:00", "is_all_day": True, "display_timezone": None}
+
+    def _calendar(self, zone="America/Anchorage"):
+        def answer(p, q):
+            if p == "/feed":
+                return {"community": {"timezone": zone}} if zone else {"data": []}
+            return {"data": {"events": [self.HEARING, self.ALL_DAY], "count": 2, "total": 2, "offset": 0}}
+        return answer
+
+    def test_events_show_the_newsrooms_local_time_not_the_utc_string(self, monkeypatch, capsys):
+        """The calendar stores UTC. Slicing the string put a 3:30pm hearing on the
+        next day at 00:30, and an all-day entry at 09:00."""
+        _no_terms(monkeypatch)
+        monkeypatch.setattr(ad, "api_request", _Rec(self._calendar()))
+        ad.cmd_events(_Args(limit=10))
+        out = capsys.readouterr().out
+        assert "2026-11-18 15:30 AKST" in out, out
+        assert "2026-11-20 (all day)" in out, out
+        assert "2026-11-19 00:30" not in out and "09:00" not in out
+
+    def test_events_say_so_when_times_fall_back_to_utc(self, monkeypatch, capsys):
+        _no_terms(monkeypatch)
+        monkeypatch.setattr(ad, "api_request", _Rec(self._calendar(zone=None)))
+        ad.cmd_events(_Args(limit=10))
+        out = capsys.readouterr().out
+        assert "Times are in UTC" in out and "2026-11-19 00:30 UTC" in out, out
+
+    def test_events_tz_flag_overrides_the_newsroom(self, monkeypatch, capsys):
+        _no_terms(monkeypatch)
+        monkeypatch.setattr(ad, "api_request", _Rec(self._calendar()))
+        ad.cmd_events(_Args(limit=10, tz="America/New_York"))
+        assert "2026-11-18 19:30 EST" in capsys.readouterr().out
+
+    def test_search_event_lines_carry_the_local_date(self, monkeypatch, capsys):
+        _no_terms(monkeypatch)
+
+        def answer(p, q):
+            if p == "/feed":
+                return {"community": {"timezone": "America/Anchorage"}}
+            return {"data": {"events": {"results": [self.HEARING], "total": 1}}}
+        monkeypatch.setattr(ad, "api_request", _Rec(answer))
+        ad.cmd_search(_Args(query="hearing", corpus="events"))
+        out = capsys.readouterr().out
+        assert "(2026-11-18)" in out and "2026-11-19" not in out, out
+
+    def test_brief_event_lines_carry_the_local_date(self, monkeypatch, capsys):
+        _no_terms(monkeypatch)
+
+        def answer(p, q):
+            if p == "/feed":
+                return {"community": {"timezone": "America/Anchorage"}}
+            return {"data": {"events": {"results": [self.HEARING], "total": 1}}}
+        monkeypatch.setattr(ad, "api_request", _Rec(answer))
+        ad.cmd_brief(_Args(topic="hearing", out=None))
+        out = capsys.readouterr().out
+        assert "(2026-11-18)" in out and "2026-11-19)" not in out, out
+
+    def test_since_finds_a_demoted_story_below_a_full_page_of_older_ones(self):
+        """`new` orders by effective_arrival_at, publication pulled back up to 24h
+        when the source is old. One such story published after the cutoff can sit
+        under a whole page of stories published before it; stopping at the first
+        page with nothing new skipped it and called the list complete."""
+        import datetime as dt
+        start = dt.datetime(2026, 11, 15, tzinfo=dt.timezone.utc)
+
+        def iso(t):
+            return t.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        older = [{"id": f"o{i}", "published_at": iso(start - dt.timedelta(minutes=10 * (i + 1))),
+                  "effective_arrival_at": iso(start - dt.timedelta(minutes=10 * (i + 1)))}
+                 for i in range(ad.SINCE_PAGE)]
+        demoted = {"id": "late", "published_at": iso(start + dt.timedelta(hours=1)),
+                   "effective_arrival_at": iso(start - dt.timedelta(hours=23))}
+        oldest = [{"id": f"x{i}", "published_at": iso(start - dt.timedelta(hours=30 + i)),
+                   "effective_arrival_at": iso(start - dt.timedelta(hours=30 + i))} for i in range(5)]
+        rows = older + [demoted] + oldest
+        calls = []
+
+        def fetch(off, lim):
+            calls.append(off)
+            page = rows[off:off + lim]
+            return {"data": page, "has_more": off + lim < len(rows)}
+        got, truncated = ad._collect_since(fetch, start)
+        assert [r["id"] for r in got] == ["late"] and not truncated
+        assert len(calls) == 2, "it stops once arrivals are more than the cap before the cutoff"
+
+    def test_since_without_arrival_times_keeps_the_old_stop(self):
+        import datetime as dt
+        start = dt.datetime(2026, 11, 15, tzinfo=dt.timezone.utc)
+        rows = [{"id": f"o{i}", "published_at": "2026-11-01T00:00:00+00:00"} for i in range(250)]
+        calls = []
+
+        def fetch(off, lim):
+            calls.append(off)
+            return {"data": rows[off:off + lim], "has_more": off + lim < len(rows)}
+        got, _ = ad._collect_since(fetch, start)
+        assert got == [] and len(calls) == 1
+
+    def test_browse_tag_forwards_sort_and_window(self, monkeypatch, capsys):
+        _no_terms(monkeypatch)
+        rec = _Rec(lambda p, q: {"data": []})
+        monkeypatch.setattr(ad, "api_request", rec)
+        ad.cmd_browse(_Args(tag="government", sort="top", window="month"))
+        assert rec.calls[0]["path"] == "/tags/government/articles"
+        assert rec.calls[0]["params"].get("sort") == "top" and rec.calls[0]["params"].get("t") == "month"

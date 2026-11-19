@@ -115,6 +115,16 @@ class TestTheClientCopy:
             assert name in sync, f"sync-shared-client.sh does not copy into {name}"
 
 
+class TestTheFenceIsTheClients:
+    @pytest.mark.parametrize("skill", SKILLS)
+    def test_no_skill_keeps_its_own_copy_of_the_escape(self, skill):
+        """Both task skills kept a one-pass `<<<` escape after the client's was made
+        to repeat, so `<<<<<END ...` still closed their fence from inside. A skill
+        fences with the client's `_fence`, so a fix to it reaches every skill."""
+        src = (skill_dir(skill) / "scripts" / CONSUMERS[skill]).read_text()
+        assert '.replace("<<<"' not in src and "lna._fence(" in src
+
+
 class TestSpec:
     @pytest.mark.parametrize("name", SKILLS)
     def test_name_matches_the_folder(self, name):

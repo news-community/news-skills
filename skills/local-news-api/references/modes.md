@@ -18,14 +18,18 @@ the two-axis relevance rule below against results whose dates are hidden.
 (`--days` to change it, `--type meeting|public_notice|community_event|class` to narrow), so it never
 lists a past meeting as upcoming. To search events by relevance across all time, including past ones,
 use `search "<q>" --corpus events`. `/calendar` has no full-text parameter, so a query argument to
-`events` filters the window client-side on title and location.
+`events` filters the window client-side on title and location. The calendar stores times in UTC, so
+`events` shows each in the newsroom's own time zone, labelled (`--tz` overrides), and an all-day
+entry as a date.
 
 ## `--since` on `browse` and `person`
 
 `/articles`, `/tags/<slug>/articles` and `/persons/<id>/articles` take no date, so `--since` reads them
-newest-first and keeps every story published on or after the day. It stops at the **first page with
-nothing new** rather than at the first older story, because a list ordered by arrival can hold an
-older story among newer ones; that costs one extra page. It stops after 1,000 stories and says so.
+newest-first and keeps every story published on or after the day. Those lists are ordered by
+**arrival**, which is publication pulled back by up to 24 hours when a story's source is old, so a
+qualifying story can sit below a whole page of older ones. Paging therefore stops once a page's
+oldest arrival is more than 24 hours before the day, when nothing later can qualify (on a route that
+reports no arrival time, at the first page with nothing new). It stops after 1,000 stories and says so.
 The day is counted in the newsroom's own time zone, as `digest --date` counts it; `--tz` overrides.
 `browse --since` needs `--sort new` (the default), since no other order lets it know when to stop.
 `browse --tag` needs no key. The tag route takes no community, so `--community` does not narrow

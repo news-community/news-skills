@@ -90,7 +90,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.8.1"
+UA = "local-news-api/1.8.2"
 
 
 def site():
@@ -540,8 +540,9 @@ def _add_paging(p, default_limit):
 
 
 def _add_since(p):
-    """--since for list modes whose endpoint takes no date: read newest-first and
-    stop at the first page with nothing new. Days in the newsroom's own zone."""
+    """--since for list modes whose endpoint takes no date: read newest-first by
+    arrival and stop once arrivals are a day past the cutoff (_collect_since).
+    Days in the newsroom's own zone."""
     p.add_argument("--since", metavar="YYYY-MM-DD",
                    help="only what was published on/after this day (or today, yesterday)")
     p.add_argument("--tz", metavar="AREA/CITY",
@@ -1063,6 +1064,54 @@ def _day_zone(explicit, reported):
                 "available on this machine (no tz database; `pip install tzdata` adds one).")
 
 
+def _events_zone(args):
+    """(tzinfo, note) for showing event times: --tz if given, else the zone the
+    newsroom reports. The calendar stores times in UTC and (measured 2026-11-19, 200
+    of 200 events) no display zone of its own, so this is what turns 00:30 UTC into
+    the 15:30 the hearing is actually at. Falling back to UTC is said, never silent."""
+    explicit = getattr(args, "tz", None)
+    reported = None
+    if not explicit:
+        try:
+            reported = _feed_zone(getattr(args, "community", None) or default_community())
+        except ApiError:
+            reported = None
+    tz, name, _note = _day_zone(explicit, reported)
+    note = "" if name != "UTC" or explicit else (
+        "Times are in UTC: the newsroom's time zone could not be read. Pass --tz <Area/City>.")
+    return tz, note
+
+
+def _truthy(v):
+    return v is True or str(v).lower() == "true"
+
+
+def _event_when(ev, tz, date_only=False):
+    """An event's date (and time) in the zone it is held in, labelled with that zone.
+    Its own `display_timezone` wins over `tz`. The string used to be sliced as it
+    came, which dropped the UTC offset: any Alaska hearing at 3pm or later printed
+    on the next day, and an all-day entry (stored at local midnight) printed 09:00."""
+    raw = ev.get("event_date")
+    ts = _parse_ts(raw)
+    if ts is None:
+        return str(raw or "")[:10]
+    zone = tz or _dt.timezone.utc
+    own = ev.get("display_timezone")
+    if own:
+        try:
+            from zoneinfo import ZoneInfo
+            zone = ZoneInfo(str(own))
+        except Exception:
+            pass   # an unknown zone name: keep the newsroom's, which is labelled below
+    local = ts.astimezone(zone)
+    if _truthy(ev.get("is_all_day")):
+        return local.strftime("%Y-%m-%d") + ("" if date_only else " (all day)")
+    if date_only:
+        # A bare date carries no zone, so a UTC one says it is UTC.
+        return local.strftime("%Y-%m-%d") + (" UTC" if zone is _dt.timezone.utc else "")
+    return local.strftime("%Y-%m-%d %H:%M %Z")
+
+
 def _parse_day(text, tz, flag="--date"):
     """A day flag as a calendar date. `today` and `yesterday` are in the day's zone."""
     today = _dt.datetime.now(tz).date()
@@ -1200,7 +1249,7 @@ BRIEF_BLANKS = (
 )
 
 
-def _brief_item(corpus, it, community):
+def _brief_item(corpus, it, community, tz=None):
     """One brief entry: a headline line plus up to two detail lines."""
     lines = []
     if corpus == "articles":
@@ -1222,7 +1271,7 @@ def _brief_item(corpus, it, community):
         tail = ", ".join(x for x in (it.get("role"), it.get("organization")) if x)
         lines.append(f"- **{name}**" + (f": {tail}" if tail else "") + (f"  [{it.get('id')}]" if it.get("id") else ""))
     elif corpus == "events":
-        when = (it.get("event_date") or "")[:10]
+        when = _event_when(it, tz, date_only=True)
         tail = ", ".join(x for x in (it.get("event_location"), it.get("event_type")) if x)
         lines.append(f"- **{it.get('event_title') or '(untitled event)'}**" + (f" ({when})" if when else "")
                      + (f": {tail}" if tail else ""))
@@ -1253,6 +1302,7 @@ def _render_brief(resp, args):
            + (f", {window}" if window else "")
            + f". Generated {_dt.datetime.now(_dt.timezone.utc).date().isoformat()} (UTC)."]
     refused = _refused(resp)
+    tz, tz_note = _events_zone(args) if _has_events(data, args.limit) else (None, "")
     for corpus, heading, how in BRIEF_SECTIONS:
         if corpus in refused:
             out += ["", f"## {heading} (not searched)", f"_{refused[corpus]}_"]
@@ -1267,14 +1317,16 @@ def _render_brief(resp, args):
         out += ["", f"## {heading} ({block.get('total', len(results))})", f"_{how}_"]
         if not results:
             out.append("- nothing found")
+        elif corpus == "events" and tz_note:
+            out.append(f"_{tz_note}_")
         for it in results[:args.limit]:
-            out += _brief_item(corpus, it, args.community)
+            out += _brief_item(corpus, it, args.community, tz)
     others = [c for c in data if c not in {s[0] for s in BRIEF_SECTIONS}]
     for corpus in others:
         results = (data.get(corpus) or {}).get("results") or []
         if results:
             out += ["", f"## Also found: {corpus} ({len(results)})"]
-            out += [_result_line(corpus, it) for it in results[:args.limit]]
+            out += [_result_line(corpus, it, tz) for it in results[:args.limit]]
     missing = [c for c in CORPORA if c not in data and c not in refused]
     if missing:
         out += ["", "_Not searched for your key: "
@@ -1374,7 +1426,7 @@ def cmd_article(args):
         _emit(resp, args, render, mode="article")
 
 
-def _result_line(corpus, it):
+def _result_line(corpus, it, tz=None):
     """One rendered search-result line, shared by `search` and `angles` so the
     display-field logic (tuned against live shapes) can't drift between them.
 
@@ -1387,24 +1439,38 @@ def _result_line(corpus, it):
              or it.get("summary") or it.get("body_text") or it.get("content")
              or "(untitled)")
     rid = it.get("source_id") if corpus == "transcripts" else (it.get("id") or it.get("slug") or "")
-    when = (it.get("published_at") or it.get("event_date") or "")[:10]
+    if corpus == "events" or (not it.get("published_at") and it.get("event_date")):
+        when = _event_when(it, tz, date_only=True)
+    else:
+        when = (it.get("published_at") or "")[:10]
     return (f"- {str(title).strip()[:140]}"
             + (f"  ({when})" if when else "")
             + (f"  [{rid}]" if rid else ""))
 
 
-def _render_corpora(data, limit):
+def _render_corpora(data, limit, args=None):
     """Render a /search `data` dict (corpus -> {results,total}) as grouped lines,
     or a shape-mismatch note. Shared by `search` and `angles`."""
     if not isinstance(data, dict):
         return ["(unexpected response shape; use --json to inspect)"]
     out = []
+    tz, tz_note = (_events_zone(args) if args is not None and _has_events(data, limit)
+                   else (None, ""))
     for corpus, block in data.items():
         results = (block or {}).get("results") or []
         out.append(f"\n## {corpus} ({(block or {}).get('total', len(results))})")
+        if corpus == "events" and results and tz_note:
+            out.append(tz_note)
         for it in results[:limit]:
-            out.append(_result_line(corpus, it))
+            out.append(_result_line(corpus, it, tz))
     return out
+
+
+def _has_events(data, limit):
+    """Whether a /search answer will show any event, so the newsroom's zone is read
+    only when a time is about to be printed."""
+    block = data.get("events") if isinstance(data, dict) else None
+    return bool(isinstance(block, dict) and (block.get("results") or [])[:limit])
 
 
 def cmd_search(args):
@@ -1419,7 +1485,7 @@ def cmd_search(args):
     def render(r):
         out = [f"# search: {args.query!r}  (corpus: {args.corpus or 'all'})"]
         out += _refused_lines(r)
-        out += _render_corpora(r.get("data") if isinstance(r, dict) else None, args.limit)
+        out += _render_corpora(r.get("data") if isinstance(r, dict) else None, args.limit, args)
         return "\n".join(out)
 
     _emit(resp, args, render, mode="search")
@@ -1443,7 +1509,7 @@ def cmd_angles(args):
             "Held on the fixed axes; the hits below vary the rest. One level only: nest via Next steps.",
         ]
         out += _refused_lines(r)
-        out += _render_corpora(r.get("data") if isinstance(r, dict) else None, args.limit)
+        out += _render_corpora(r.get("data") if isinstance(r, dict) else None, args.limit, args)
         out.append("\nRelevance, not corroboration: a hit is relevant when a SECOND axis agrees, not "
                    "just the topic. That still does not confirm a claim, since several pieces can repeat "
                    "one source: verify against an independent source, ideally the primary record.")
@@ -1596,8 +1662,11 @@ def cmd_events(args):
             shown = events[: args.limit]
             first = data.get("offset") if isinstance(data.get("offset"), int) else offset_arg
             of = data.get("total") if isinstance(data.get("total"), int) else None
+        tz, tz_note = _events_zone(args) if shown else (None, "")
+        if tz_note:
+            out.append(tz_note)
         for e in shown:
-            when = (e.get("event_date") or "")[:16].replace("T", " ")
+            when = _event_when(e, tz)
             where = e.get("event_location") or ""
             kind = e.get("event_type") or ""
             out.append(f"- {e.get('event_title') or '(untitled)'}")
@@ -2145,6 +2214,12 @@ TIME_WINDOWS = ("today", "week", "month", "all")
 
 SINCE_PAGE = 100
 SINCE_SCAN_CAP = 1000   # CHOSEN: ten pages, far past a beat's week; a guard, and said when hit
+# VERIFIED: the platform's `new` order is effective_arrival_at, which is a story's
+# publication pulled back by at most 24 hours when its source is old (platform
+# article_dating(), migration 20270504000000: LEAST(..., interval '24 hours')).
+# A story published on or after a cutoff therefore arrives no earlier than this
+# much before it. If the platform raises that cap, this must follow it.
+ARRIVAL_DEMOTION_CAP = _dt.timedelta(hours=24)
 
 
 def _since_start(args):
@@ -2162,9 +2237,14 @@ def _since_start(args):
 
 def _collect_since(fetch, start):
     """Every row published on or after `start`, from a newest-first list endpoint
-    that takes no date. Pages until a page holds nothing new (robust to a list
-    ordered by arrival rather than strictly by publication, where one older row
-    can sit among newer ones), the list ends, or SINCE_SCAN_CAP rows were read.
+    that takes no date. The list is ordered by arrival, not publication: a story
+    whose source is old arrives up to ARRIVAL_DEMOTION_CAP before it was published,
+    so a whole page of older stories can sit above one that qualifies. Stopping at
+    the first page with nothing new (the old rule) skipped it and called the list
+    complete. Paging now stops once a page's oldest arrival is more than the cap
+    before `start`, when nothing after it can qualify; on a route that does not
+    report arrival times it falls back to the old rule. It also stops when the list
+    ends, or after SINCE_SCAN_CAP rows, which is reported.
     Returns (rows, truncated), or (None, resp) when the shape is not a list."""
     rows, offset = [], 0
     while True:
@@ -2179,7 +2259,14 @@ def _collect_since(fetch, start):
         # has_more is believed only for a short page. A route that reports its
         # total as this page's own length says has_more=false on every full page
         # (persons/<id>/articles did), and believing it stopped at 100 silently.
-        if not page or not fresh or (resp.get("has_more") is False and len(page) < SINCE_PAGE):
+        if not page or (resp.get("has_more") is False and len(page) < SINCE_PAGE):
+            return rows, False
+        arrivals = [t for t in (_parse_ts(a.get("effective_arrival_at"))
+                                for a in page if isinstance(a, dict)) if t]
+        if arrivals and len(arrivals) == len(page):
+            if min(arrivals) < start - ARRIVAL_DEMOTION_CAP:
+                return rows, False
+        elif not fresh:
             return rows, False
         if offset >= SINCE_SCAN_CAP:
             return rows, True
@@ -2212,21 +2299,22 @@ def cmd_browse(args):
     so for a consumer targeting a community it is the same mode with less reach."""
     since = getattr(args, "since", None)
     if since and args.sort != "new":
-        sys.exit(f"--since needs --sort new (the default): it reads newest-first and stops at the "
-                 f"first page with nothing new, which a {args.sort!r} order cannot promise.")
+        sys.exit(f"--since needs --sort new (the default): it reads newest-first by arrival and stops "
+                 f"once arrivals are well past the cutoff, which a {args.sort!r} order cannot promise.")
     # /tags/<slug>/articles answers without a key (platform: requireAuth false;
     # 200 keyless on 2026-11-19), so it gets none; /articles still needs one.
     public = bool(args.tag)
     if args.tag:
-        path, params = f"/tags/{_seg(args.tag, 'tag')}/articles", {"limit": args.limit, "offset": args.offset}
-        if since:
-            params["sort"] = "new"
+        # The tag route takes the same sort and window as /articles (platform
+        # tags/[slug]/articles reads `sort` and `t`); they used to be dropped here.
+        path = f"/tags/{_seg(args.tag, 'tag')}/articles"
+        params = {"limit": args.limit, "offset": args.offset, "sort": args.sort}
     else:
         path = "/articles"
         params = {"community": args.community, "limit": args.limit,
                   "offset": args.offset, "sort": args.sort}
-        if args.sort == "top" and args.window:
-            params["t"] = args.window
+    if args.sort == "top" and args.window:
+        params["t"] = args.window
     if since:
         begin, day, _zone, tz_note = _since_start(args)
         rows, extra = _collect_since(lambda off, lim: _guided(lambda: api_request(
@@ -2549,6 +2637,8 @@ def main():
     p.add_argument("query", nargs="?", default="", help="optional substring filter on title/location")
     p.add_argument("--days", type=int, default=30, help="size of the forward window (default 30)")
     p.add_argument("--type", help="event type, e.g. meeting, public_notice, community_event, class")
+    p.add_argument("--tz", metavar="AREA/CITY",
+                   help="the time zone times are shown in (default: the one the newsroom reports)")
     _add_paging(p, 10)
 
     p = sub.add_parser("rag", parents=[common],

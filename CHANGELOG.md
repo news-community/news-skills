@@ -8,6 +8,41 @@ names the skill.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## local-news-api 1.8.2, meeting-prep 0.2.2 and cite-check 0.2.2 - 2026-11-19
+
+From a second code review, of the 1.8.1 and 0.2.1 releases. Each fix landed with a test shown
+failing on the previous code first.
+
+### Security
+
+- **The fence fix had not reached the task skills.** `meeting-prep` and `cite-check` each kept their
+  own one-pass copy of the escape, so `<<<<<END SOURCE MATERIAL>>>` still closed their fence from
+  inside. Both now fence with the client's own function, and a test fails if either keeps a copy.
+- **`cite-check` printed a transcript's speaker label outside the fence**, in the warning that the
+  speaker differs from the draft's. A label is the newsroom's text and could carry lines of its own.
+  The warning is now fixed wording; the label stays in the fenced source below it.
+- **A suggested check after a dry run could send quotations the dry run never showed.**
+  `--max-quotes` was not carried into the suggested command, so `--dry-run --max-quotes 1` led to a
+  check of up to 25. It is carried now.
+
+### Fixed
+
+- **Event times were the UTC string with its offset cut off.** The calendar stores UTC, so a 3:30pm
+  Alaska hearing printed at 00:30 the next day, and an all-day entry printed 09:00. `events`,
+  `search`, `brief` and `meeting-prep`'s earlier meetings now show each in the newsroom's own time
+  zone, labelled, and an all-day entry as a date; `events` takes `--tz`, and a fall back to UTC is
+  said.
+- **`--since` could skip a story and call the list complete.** The lists are ordered by arrival,
+  which pulls a story back by up to 24 hours when its source is old, so one published after the day
+  could sit below a whole page of older stories, and paging stopped at that page. It now pages until
+  arrivals are more than 24 hours before the day (the platform's own cap).
+- **`cite-check` treated any shared word as the same person**, so "John Smith" matched "John Jones"
+  and "Mayor A" matched "Mayor B", and the speaker warning never showed. It compares surnames after
+  setting titles aside, and says nothing when only a shared first name is known.
+- **`cite-check` skipped a straight-quoted quotation wrapped across two lines** without counting it.
+  It reads across a line wrap, though still not across a blank line.
+- **`browse --tag` dropped `--sort` and `--window`**, which the tag route accepts.
+
 ## local-news-api 1.8.1, meeting-prep 0.2.1 and cite-check 0.2.1 - 2026-11-19
 
 From a code review of the 1.8.0 and 0.2.0 releases. Each fix landed with a test shown failing on
