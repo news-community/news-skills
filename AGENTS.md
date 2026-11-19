@@ -3,8 +3,10 @@
 > Onboarding for AI coding agents. If you are a human, welcome: the same applies to you, and
 > [CONTRIBUTING.md](CONTRIBUTING.md) has the longer version.
 
-This repository holds one agent skill, **Local News API** (`skills/local-news-api/`): a read-only
-client for a local newsroom's public API on the Communities News platform. The worked example
+This repository holds three agent skills. **Local News API** (`skills/local-news-api/`) is a
+read-only client for a local newsroom's public API on the Communities News platform. **Meeting
+Prep** (`skills/meeting-prep/`) and **Cite Check** (`skills/cite-check/`) are task skills built on
+that client. The worked example
 everywhere is **Alaska News**: site `https://alaskanews.com`, API `https://alaskanews.com/api/v1`,
 spec `https://alaskanews.com/api/v1/openapi.json`. It is published on ClawHub as
 [`local-news-api`](https://clawhub.ai/alaskanews/skills/local-news-api).
@@ -19,7 +21,21 @@ skills/local-news-api/
   scripts/local_news_api.py   the client: one file, Python 3.9+, standard library only
   scripts/test_local_news_api.py   the offline suite (kept out of the registry bundle)
   .clawhubignore              what a registry does not receive
+skills/meeting-prep/, skills/cite-check/
+  SKILL.md, agents/openai.yaml, .clawhubignore   as above
+  scripts/meeting_prep.py, scripts/cite_check.py   the task, written against the client
+  scripts/local_news_api.py   a BYTE-IDENTICAL copy of the client (an installed skill has only
+                              its own folder); never edit it here
+  scripts/test_*.py           offline behaviour tests
+tests/test_skill_spec.py      spec, registry and read-only checks shared by the two task skills,
+                              and the check that each client copy matches the canonical one
+scripts/sync-shared-client.sh copies the canonical client into both task skills
 ```
+
+**After any change to `skills/local-news-api/scripts/local_news_api.py`, run
+`sh scripts/sync-shared-client.sh`** and commit the copies with it, or `tests/test_skill_spec.py`
+fails. The task skills use only GET requests, not even the client's read-only POST, and CI greps
+for that separately.
 
 ## Setup, run, test
 

@@ -40,3 +40,8 @@ jobs:
         # version of this check would be skipped rather than failed.
         run: |
           ! grep -nE '"(PATCH|PUT|DELETE)"' skills/local-news-api/scripts/local_news_api.py
+      - name: The skills built on the client, and their shared spec checks
+        run: python -m pytest skills/meeting-prep/scripts skills/cite-check/scripts tests -q
+      - name: The skills built on the client make GET requests only
+        run: |
+          ! grep -nE '"(POST|PATCH|PUT|DELETE)"' skills/meeting-prep/scripts/meeting_prep.py skills/cite-check/scripts/cite_check.py

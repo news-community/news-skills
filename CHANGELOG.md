@@ -6,6 +6,31 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## meeting-prep 0.1.0 and cite-check 0.1.0 - 2026-11-19
+
+Two new skills, built on the Local News API client, which each ships as a byte-identical copy
+(`scripts/sync-shared-client.sh`; `tests/test_skill_spec.py` fails when a copy drifts). The
+version numbers below this section are `local-news-api`'s.
+
+### Added
+
+- **`meeting-prep`**: one page for a public meeting on a topic. Meetings, hearings and comment or
+  appeal deadlines coming up, in the newsroom's own time zone, each with its official notice (or
+  a plain "none on the newsroom's calendar") and the coverage already linked to it; with a key,
+  what was reported, what was said at earlier meetings (linked to the moment in the transcript),
+  earlier meetings and people on the record. The calendar part needs no key and sends none. The
+  whole window is paged by the server's `total`, not by a short page. Matching is on each event's
+  title and description, not its address: on the first live run "highway" matched a city
+  finance committee whose city hall sits on a highway.
+- **`cite-check`**: checks each quotation in a draft against the newsroom's transcripts and
+  articles (VERBATIM, CLOSE with the source's own words, NOT FOUND in what was searched, or NOT
+  SEARCHED), flags a transcript speaker who differs from the draft's attribution, and writes
+  citations with backlinks. Only the quoted words are sent, never the draft, and `--dry-run`
+  sends nothing. Articles are compared as plain text: on the first live run a quotation running
+  across a linked phrase read NOT FOUND (0.58) against the raw Markdown and VERBATIM after link
+  syntax was removed. The CLOSE threshold (0.8) is a chosen starting value, not yet measured
+  against real misquotes.
+
 ## 1.7.0 - 2026-11-19
 
 ### Added

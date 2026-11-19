@@ -1,0 +1,10 @@
+# Catalog presentation: the name and summary a skill registry shows in its listing.
+# SKILL.md's `description` is the agent's trigger and stays written for that job;
+# this file is written for the person browsing a catalog. Limits (ClawHub):
+# display_name 120 characters, short_description 300. Tests hold both.
+interface:
+  display_name: "Meeting Prep: Public Meetings, Hearings, Comment Deadlines and What Was Said"
+  short_description: >-
+    Get ready for a public meeting: upcoming meetings, hearings and comment deadlines on a topic,
+    each with its official notice and prior coverage, plus what was said at earlier meetings.
+    Read-only. Communities News platform; live for Alaska News.

@@ -1,0 +1,7 @@
+# Kept out of the registry bundle. The tests read files from the repository root,
+# so an installed copy could not run them; they stay in the repository and run in CI.
+scripts/test_cite_check.py
+__pycache__/
+.pytest_cache/
+.env
+.env.local

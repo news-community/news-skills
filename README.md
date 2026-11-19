@@ -25,13 +25,20 @@ with where to go next, and carries the newsroom's **own** machine-readable usage
 fetched at run time rather than compiled in, so the tool cannot print one newsroom's terms
 over another's reporting.
 
+Two task skills are built on that client. **`meeting-prep`** gets you ready for a public meeting:
+what is coming up on a topic, the official notice, the coverage so far and what was said last time.
+**`cite-check`** checks the quotes in your draft against the meeting record and the newsroom's
+articles, and writes the citations.
+
 Everything here is **read-only**. It consumes the public API; it does not submit, edit, or
-write back to the platform. On your own machine it writes one file, and only when you ask:
-`brief --out FILE` saves a brief, replacing a file already at that path.
+write back to the platform. On your own machine each skill writes one file, and only when you
+ask: `brief --out FILE`, and `--out FILE` in the other two, replacing a file already at that path.
 
 | Skill | What it does |
 |-------|--------------|
 | [`skills/local-news-api`](skills/local-news-api/SKILL.md) | **Local News API**: a read-only client for a newsroom's public API (for example `https://alaskanews.com/api/v1`). 18 modes: `check` (what your key reaches), `digest` and `browse` (what's published; `digest --date` for one day's stories, a summary each; `browse --since` for what is new on a beat), `near` (recent stories nearest a point you give), `search` and `angles` (five-Ws discovery), `brief` (a research brief before writing), `article`, `transcript`, `events` (upcoming meetings, hearings and comment deadlines), `people` and `person` (the Who axis), `topics` and `tags` (beats and subjects), `rag` (answer plus traceable citations), `clips` (the quotable clips from an article or a meeting) and `clip`, and `communities`. |
+| [`skills/meeting-prep`](skills/meeting-prep/SKILL.md) | **Meeting Prep**: get ready for a public meeting. Meetings, hearings and comment or appeal deadlines coming up on a topic, each with its official notice and the coverage already linked to it; with a key, what was reported, what was said at earlier meetings and who is on the record. The calendar part needs no key. |
+| [`skills/cite-check`](skills/cite-check/SKILL.md) | **Cite Check**: check the quotations in a draft against the newsroom's meeting transcripts and articles (verbatim, close, or not found in what was searched), flag a transcript speaker who differs from your attribution, and write citations with backlinks. Sends only the quoted words, never the draft; `--dry-run` shows what would be sent. |
 
 ## Install
 
@@ -67,6 +74,9 @@ git clone https://github.com/news-community/news-skills.git ~/.claude/skills/new
 git clone https://github.com/news-community/news-skills.git ~/src/news-skills
 ln -s ~/src/news-skills/skills/local-news-api ~/.claude/skills/local-news-api
 ```
+
+**`meeting-prep` and `cite-check` are not on ClawHub yet.** Install them from a clone the same way,
+for example `ln -s ~/src/news-skills/skills/meeting-prep ~/.claude/skills/meeting-prep`.
 
 **Other agents**: point yours at `skills/local-news-api/`, or skip the agent entirely and run the
 CLI directly as below. It is a plain Python program and does not need an agent to be useful.
@@ -107,6 +117,10 @@ python3 skills/local-news-api/scripts/local_news_api.py events --days 14
 # 6. Work an actor, or a beat:
 python3 skills/local-news-api/scripts/local_news_api.py people "dunleavy"
 python3 skills/local-news-api/scripts/local_news_api.py browse --tag transportation
+
+# 7. Get ready for a meeting, or check the quotes in a draft:
+python3 skills/meeting-prep/scripts/meeting_prep.py "port of alaska"
+python3 skills/cite-check/scripts/cite_check.py draft.md --dry-run
 ```
 
 **Tick "Read-only" when you create the key**, and know its one cost: `rag` will not work, because
@@ -153,6 +167,9 @@ reader may want but an agent never needs lives in
 **This repository is fully standalone.** It has no dependency on any private repository, no
 build step, no package to install, and no shared library. The client is a single Python file
 using only the standard library, and its tests run with `pytest` and nothing else.
+`meeting-prep` and `cite-check` each ship a byte-identical copy of that file, because an installed
+skill has only its own folder; a test fails when a copy differs, and
+`sh scripts/sync-shared-client.sh` brings them back into line.
 
 It is developed inside a private monorepo, which is an implementation detail of how it is
 maintained and not a requirement for using it. If you cloned this and it works, it works.
@@ -170,6 +187,7 @@ only one live, so this is a door rather than a road.
 ```bash
 pip install pytest
 python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
+python3 -m pytest skills/meeting-prep/scripts skills/cite-check/scripts tests -q
 ```
 
 Offline: no key and no network required (`LOCAL_NEWS_API_LIVE=1` adds a few tests that call the
