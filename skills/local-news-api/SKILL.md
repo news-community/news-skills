@@ -19,7 +19,7 @@ compatibility: >-
   keyed modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
-  version: "1.7.0"
+  version: "1.8.0"
   author: Communities News, Inc.
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -262,9 +262,11 @@ name. How each works and where it stops: [`references/modes.md`](references/mode
 
 ## Every output points onward
 
-Every mode ends with prioritized **Next steps** (each with its *why*), the related modes and a see-also,
-and errors carry a recovery rather than a bare status. `--json` is the machine surface and stays valid
-JSON. How that works, including the API's own `next_steps`: [`references/output.md`](references/output.md).
+Every mode ends with **Next steps**, each marked `high`, `medium` or `low` with its reason, highest
+first, and filled in with the real ids from the output so it runs as printed; then the related modes
+and a see-also. Errors say why and what to try. `--json` keeps stdout the payload and puts the steps
+on stderr as JSON. Details: [`references/output.md`](references/output.md). Two task skills are
+built on this client: `meeting-prep` and `cite-check`.
 
 ---
 
@@ -312,12 +314,9 @@ phrase with no matching published story behind it.
 
 ### Not covered here, deliberately
 
-**`person` reports "appears in", not "quoted in", and the distinction is load-bearing.**
-`/persons/<id>/articles` returns a UNION: articles where an attribution matched the person's name,
-and articles structurally linked to them. Only the first kind carries a verbatim excerpt. Rows with a
-quote are marked `quoted (Nx)`; when a whole page has none, the client says so, because "Dunleavy
-appears in this piece" and "Dunleavy said this in this piece" are different claims and only one of
-them is quotable. Open the article and confirm before you attribute words to anyone.
+**`person` reports "appears in", not "quoted in".** Only rows marked `quoted (Nx)` carry the
+person's words; open the article before you attribute anything to them
+([`references/modes.md`](references/modes.md)).
 
 Everything else on the read surface that a consumer key reaches is now wrapped. What remains
 unwrapped is write-side or editor-only, and out of scope by design.

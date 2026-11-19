@@ -219,3 +219,36 @@ class TestRunning:
         with pytest.raises(SystemExit) as e:
             cc.main([draft(tmp_path, "No quotations here at all.")])
         assert "Nothing was sent" in str(e.value)
+
+
+class TestNextSteps:
+    """HATEOAS: no dead end, a clear place to start, reasons,
+    and commands that run as printed."""
+
+    def test_dry_run_points_at_the_real_run(self, env, tmp_path, capsys):
+        env.setattr(lna, "api_request", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent")))
+        path = draft(tmp_path, f'{LQ}We will finish the port by next spring,{RQ} said Jane Doe.')
+        cc.main([path, "--dry-run"])
+        out = capsys.readouterr().out
+        assert "## Next steps" in out and "1. [high]" in out
+        assert f"python3 scripts/cite_check.py {path}" in out
+        assert "Related:" in out and "See also:" in out
+
+    def test_a_quote_not_found_leads_with_a_search_for_its_words(self, env, tmp_path, capsys):
+        env.setenv(lna.KEY_ENV, KEY)
+        env.setattr(lna, "api_request", FakeSearch([{"data": {"articles": {"results": []},
+                                                              "transcripts": {"results": []}}}]))
+        cc.main([draft(tmp_path, f"{LQ}We will finish the port by next spring.{RQ}")])
+        out = capsys.readouterr().out
+        first = out.split("## Next steps", 1)[1].split("2.")[0]
+        assert "[high]" in first and "search 'We will finish the port by next spring'" in first
+
+    def test_json_puts_next_steps_on_stderr(self, env, tmp_path, capsys):
+        env.setenv(lna.KEY_ENV, KEY)
+        env.setattr(lna, "api_request", FakeSearch([{"data": {"articles": {"results": []},
+                                                              "transcripts": {"results": []}}}]))
+        cc.main([draft(tmp_path, f"{LQ}We will finish the port by next spring.{RQ}"), "--json"])
+        cap = capsys.readouterr()
+        json.loads(cap.out)
+        line = [l for l in cap.err.splitlines() if l.startswith('{"next_steps"')][0]
+        assert json.loads(line)["next_steps"][0]["priority"] == "high"

@@ -1,5 +1,7 @@
 # How this skill's access claims were verified
 
+**Parent:** [`SKILL.md`](../SKILL.md) · **Siblings:** [modes](modes.md) · [angles](angles.md) · [output](output.md)
+
 Provenance for the reach table and the honest-limits list in `SKILL.md`. Moved out of that file on
 2026-09-10 because it is a record of *how we know*, not an instruction the agent needs on every run,
 and the body an agent loads is budgeted (the spec recommends under 500 lines and 5,000 tokens).

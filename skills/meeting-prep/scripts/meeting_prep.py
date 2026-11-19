@@ -30,6 +30,7 @@ import argparse
 import datetime as _dt
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -37,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import local_news_api as lna  # noqa: E402  (the shared client, shipped beside this file)
 
 NAME = "meeting-prep"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 UA = f"{NAME}/{VERSION}"
 # The shared client reads its User-Agent from this module global on every request,
 # so the newsroom sees which skill asked.
@@ -375,6 +376,73 @@ def render(page):
     return "\n".join(out)
 
 
+# --- next steps (HATEOAS: every output says where to go next) ----------------------------------
+# Each step is (command, reason, priority), highest first, at most five, pre-filled
+# where the page holds the value. A value copied from the newsroom into a command
+# must be shaped like an id or a slug (lna._safe): these commands sit outside the
+# source-material fence and an agent may run them. The person's own input (the
+# topic, the draft path) is shell-quoted instead. Timing is not carried: every step
+# is something to do now.
+
+REPO_URL = "https://github.com/news-community/news-skills"
+CLIENT = "python3 scripts/local_news_api.py"
+
+
+def _ranked(steps):
+    order = ("high", "medium", "low")
+    steps = sorted(steps, key=lambda s: order.index(s[2]))[:5]
+    if steps and steps[0][2] != "high":
+        steps[0] = (steps[0][0], steps[0][1], "high")  # always a clear place to start
+    return steps
+
+
+def render_next(steps, related):
+    out = ["", "## Next steps"]
+    for i, (cmd, why, prio) in enumerate(steps, 1):
+        out += [f"{i}. [{prio}] `{cmd}`", f"   {why}"]
+    out += ["", "Related: " + " · ".join(related),
+            f"See also: SKILL.md (beside this script) · {REPO_URL}"]
+    return "\n".join(out)
+
+
+def json_next(steps):
+    """--json keeps stdout the page itself, so the next steps go to stderr as JSON."""
+    print(json.dumps({"next_steps": [{"command": c, "reason": w, "priority": p} for c, w, p in steps]},
+                     ensure_ascii=False), file=sys.stderr)
+
+
+RELATED = ["local-news-api (the full client, shipped here as scripts/local_news_api.py; its `check` shows "
+           "what your key reaches)",
+           "cite-check (checks a draft's quotes against the same record, and writes the citations)"]
+
+
+def next_steps(page, has_key):
+    rec, steps = page["record"], []
+    topic = shlex.quote(page["topic"])
+    if not has_key:
+        steps.append((f"echo '{lna.KEY_ENV}=cn_...' >> .env.local ; then rerun",
+                      "the record part (coverage, what was said before, who is on the record) needs your "
+                      "own key; the calendar part above does not", "high"))
+    if not page["upcoming"] and not page["deadlines"]:
+        widen = "" if page["match_rule"] == "any word" else " --any-word"
+        days = max(90, page["window_days"] * 2)
+        steps.append((f"python3 scripts/meeting_prep.py {topic}{widen} --days {min(days, 366)}",
+                      "nothing on the calendar matched: a body words its agenda its own way, and hearings "
+                      "are often noticed weeks out", "high"))
+    sid = next((v for v in (lna._safe(t.get("source_id")) for t in rec.get("transcripts") or []) if v), None)
+    if sid:
+        steps.append((f"{CLIENT} transcript {sid}",
+                      "read the whole earlier meeting before you speak; an excerpt can miss what changed", "medium"))
+    slug = next((v for v in (lna._safe(a.get("slug"), slug=True) for a in rec.get("articles") or []) if v), None)
+    if slug:
+        steps.append((f"{CLIENT} article {slug}", "read the coverage you will cite in full, not its headline",
+                      "medium"))
+    steps.append(("python3 <cite-check>/scripts/cite_check.py <your draft> --dry-run",
+                  "if you write about the meeting, check your quotes against the record before you publish",
+                  "low"))
+    return _ranked(steps)
+
+
 def _reraise(e):
     raise e
 
@@ -409,12 +477,14 @@ def main(argv=None):
         raise
 
     terms = lna.terms_note()
+    steps = next_steps(page, bool(lna.read_key()))
     if args.json:
         page["terms"] = terms
         print(json.dumps(page, indent=2, ensure_ascii=False))
         print(terms, file=sys.stderr)
+        json_next(steps)
         return
-    text = render(page)
+    text = render(page) + "\n" + render_next(steps, RELATED)
     print(text)
     print(f"\n---\n{terms}")
     if args.out:

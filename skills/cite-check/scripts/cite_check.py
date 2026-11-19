@@ -37,6 +37,7 @@ import datetime as _dt
 import difflib
 import json
 import re
+import shlex
 import sys
 import unicodedata
 import urllib.parse
@@ -46,7 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import local_news_api as lna  # noqa: E402  (the shared client, shipped beside this file)
 
 NAME = "cite-check"
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 UA = f"{NAME}/{VERSION}"
 lna.UA = UA  # the shared client reads this global on every request
 
@@ -395,6 +396,89 @@ def render(report):
     return "\n".join(out)
 
 
+# --- next steps (HATEOAS: every output says where to go next) ----------------------------------
+# Each step is (command, reason, priority), highest first, at most five, pre-filled
+# where the page holds the value. A value copied from the newsroom into a command
+# must be shaped like an id or a slug (lna._safe): these commands sit outside the
+# source-material fence and an agent may run them. The person's own input (the
+# topic, the draft path) is shell-quoted instead. Timing is not carried: every step
+# is something to do now.
+
+REPO_URL = "https://github.com/news-community/news-skills"
+CLIENT = "python3 scripts/local_news_api.py"
+
+
+def _ranked(steps):
+    order = ("high", "medium", "low")
+    steps = sorted(steps, key=lambda s: order.index(s[2]))[:5]
+    if steps and steps[0][2] != "high":
+        steps[0] = (steps[0][0], steps[0][1], "high")  # always a clear place to start
+    return steps
+
+
+def render_next(steps, related):
+    out = ["", "## Next steps"]
+    for i, (cmd, why, prio) in enumerate(steps, 1):
+        out += [f"{i}. [{prio}] `{cmd}`", f"   {why}"]
+    out += ["", "Related: " + " · ".join(related),
+            f"See also: SKILL.md (beside this script) · {REPO_URL}"]
+    return "\n".join(out)
+
+
+def json_next(steps):
+    """--json keeps stdout the page itself, so the next steps go to stderr as JSON."""
+    print(json.dumps({"next_steps": [{"command": c, "reason": w, "priority": p} for c, w, p in steps]},
+                     ensure_ascii=False), file=sys.stderr)
+
+
+RELATED = ["local-news-api (the full client, shipped here as scripts/local_news_api.py; its `check` shows "
+           "what your key reaches)",
+           "meeting-prep (a public meeting's calendar entry, notice, coverage and what was said before)"]
+
+
+def next_steps(report, draft_arg):
+    res, steps = report["results"], []
+    draft = shlex.quote(draft_arg)
+    mismatch = [r for r in res if r["matches"] and r["matches"][0].get("speaker_matches_draft") is False]
+    if mismatch:
+        steps.append(("open the transcript link under each speaker warning above",
+                      f"{len(mismatch)} quotation(s) are on the record under a different speaker; attributing "
+                      "them unchecked is the error a correction would have to fix", "high"))
+    missing = [r for r in res if r["status"] == "not found"]
+    if missing:
+        words = " ".join(re.findall(r"[\w']+", missing[0]["quote"])[:8])
+        steps.append((f'{CLIENT} search {shlex.quote(words)} --corpus articles,transcripts,events',
+                      f"{len(missing)} quotation(s) were not found; a looser search, or the primary record, may "
+                      "hold them, and an unsourced quote should not run", "high"))
+    if any("transcripts" in r["not_searched"] for r in res):
+        steps.append((f"{CLIENT} check",
+                      "transcripts were not searched for your key (it needs a subscriber's); see what it "
+                      "reaches", "medium"))
+    if report.get("stopped") or report.get("skipped_by_max_quotes"):
+        n = report.get("unchecked", 0) + report.get("skipped_by_max_quotes", 0)
+        steps.append((f"python3 scripts/cite_check.py {draft} --max-quotes {len(res) + n}",
+                      f"{n} quotation(s) were not checked", "medium"))
+    if res and all(r["status"] == "verbatim" for r in res):
+        steps.append(("paste the Citations section into your draft",
+                      "every quotation was found verbatim; attribution and a backlink are what the "
+                      "newsroom's terms ask for", "high"))
+    steps.append((f"python3 scripts/cite_check.py {draft} --out citations.md",
+                  "keep this report beside the draft, to show where each quote came from", "low"))
+    return _ranked(steps)
+
+
+def dry_run_steps(draft_arg):
+    draft = shlex.quote(draft_arg)
+    steps = [(f"python3 scripts/cite_check.py {draft}",
+              "run the check: only the quoted words above are sent, never the draft", "high")]
+    if not lna.read_key():
+        steps.insert(0, (f"echo '{lna.KEY_ENV}=cn_...' >> .env.local",
+                         "a check needs your own key; a dry run does not", "high"))
+    steps.append((f"python3 scripts/cite_check.py {draft} --min-words 3",
+                  "include shorter quotations, if a short one matters to the story", "low"))
+    return _ranked(steps)
+
+
 def read_draft(path):
     if path == "-":
         return sys.stdin.read(), "stdin"
@@ -439,6 +523,7 @@ def main(argv=None):
             print(f"{i}. line {q['line']}: {sent}{who}")
         if len(quotes) > args.max_quotes:
             print(f"\n{len(quotes) - args.max_quotes} more would be skipped by --max-quotes.")
+        print(render_next(dry_run_steps(args.draft), RELATED))
         return
 
     if not quotes:
@@ -463,14 +548,17 @@ def main(argv=None):
               "generated_utc": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M")}
 
     terms = lna.terms_note()
+    steps = next_steps(report, args.draft)
     if args.json:
         report["terms"] = terms
         print(json.dumps(report, indent=2, ensure_ascii=False))
         print(terms, file=sys.stderr)
+        json_next(steps)
         return
     out = render(report)
     if report["skipped_by_max_quotes"]:
         out += f"\n\n_{report['skipped_by_max_quotes']} more quotation(s) not checked: raise --max-quotes._"
+    out += "\n" + render_next(steps, RELATED)
     print(out)
     print(f"\n---\n{terms}")
     if args.out:

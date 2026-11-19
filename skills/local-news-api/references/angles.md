@@ -1,5 +1,7 @@
 # Working the story: the five Ws (the `angles` mode)
 
+**Parent:** [`SKILL.md`](../SKILL.md) · **Siblings:** [modes](modes.md) · [output](output.md) · [verification](verification.md)
+
 Moved out of `SKILL.md` on 2026-11-19 to keep the body an agent loads on every run inside its budget.
 
 **Read this when** you are choosing an `angles --intent`.

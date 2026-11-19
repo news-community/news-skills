@@ -89,7 +89,7 @@ DEFAULT_SITE = "https://alaskanews.com"
 DEFAULT_COMMUNITY = "alaska-news"
 # Kept equal to SKILL.md's metadata.version by a test; it was "1.1" while the
 # skill shipped 1.2.0, which is the drift that test exists to stop.
-UA = "local-news-api/1.7.0"
+UA = "local-news-api/1.8.0"
 
 
 def site():
@@ -603,33 +603,91 @@ def _server_next_steps(resp) -> list:
     return out
 
 
-def _skill_next_steps(mode, args, has_key, state=None) -> list:
-    """State-driven next actions for THIS skill: (action, why). Priority order,
-    capped at 5 by the caller. State shows up as `has_key` and per-mode context."""
+# --- next steps: what to run after any output (HATEOAS: every output says where to go next) ---
+#
+# Every step is (command, reason, priority). Priority is explicit, not just the
+# order, because an agent reading the footer acts on the first high step and
+# maybe one medium. Timing is not carried: every step here is a read you can run
+# now, so there is nothing to schedule. Steps are PRE-FILLED from the response
+# when it holds a usable value, so the command runs as printed. Only values
+# shaped like an id or a slug are copied in: these commands sit OUTSIDE the
+# source-material fence and an agent may run them, so free text from a story (a
+# title, a quote) never becomes part of one.
+
+_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,99}")
+
+
+def _safe(value, slug=False):
+    """`value` if it is shaped like an id (or, with slug=True, a slug), else None."""
+    v = str(value or "")
+    if _ID_RE.fullmatch(v) or (slug and _SLUG_RE.fullmatch(v)):
+        return v
+    return None
+
+
+def _rows(resp):
+    """The list a list response carries, wherever it put it."""
+    d = resp.get("data") if isinstance(resp, dict) else None
+    if isinstance(d, list):
+        return [r for r in d if isinstance(r, dict)]
+    if isinstance(d, dict) and isinstance(d.get("events"), list):
+        return [r for r in d["events"] if isinstance(r, dict)]
+    return []
+
+
+def _hit(resp, corpus, key="id", slug=False):
+    """The first usable value of `key` among a /search response's `corpus` results."""
+    d = resp.get("data") if isinstance(resp, dict) else None
+    block = d.get(corpus) if isinstance(d, dict) else None
+    results = block.get("results") if isinstance(block, dict) else None
+    for it in results if isinstance(results, list) else []:
+        v = _safe(it.get(key), slug) if isinstance(it, dict) else None
+        if v:
+            return v
+    return None
+
+
+def _first(rows, key="id", slug=False):
+    for r in rows:
+        v = _safe(r.get(key), slug)
+        if v:
+            return v
+    return None
+
+
+def _or(value, placeholder):
+    return value if value else placeholder
+
+
+def _skill_next_steps(mode, args, has_key, state=None, resp=None) -> list:
+    """State-driven next actions for THIS skill: (command, reason, priority).
+    Highest first, capped at 5 by the caller. State is `has_key`, the response
+    (for real ids) and per-mode context."""
+    rows = _rows(resp)
+    key_step = (f"echo '{KEY_ENV}=cn_...' >> .env.local ; then `check`",
+                "the public modes work without a key; a key unlocks search, brief, browse, people, "
+                "clips and the rest", "high")
     if mode == "digest":
-        steps = []
-        if not has_key:
-            steps.append((f"echo '{KEY_ENV}=cn_...' >> .env.local ; then `check`",
-                          "digest, topics and tags need no key; a key unlocks search, brief, "
-                          "transcripts and the rest"))
+        steps = [] if has_key else [key_step]
         if getattr(args, "date", None):
             steps += [
-                ("article <slug from a story above>", "read one in full, and cite the article, not this summary"),
+                ("article <slug of a story above>", "read one in full, and cite the article, not this summary", "high"),
                 ('brief "<topic from a story above>"',
-                 "turn a story into a research brief: prior coverage, the record, who is on it"),
-                ("digest --date <the day before>", "step back a day"),
+                 "turn a story into a research brief: prior coverage, the record, who is on it", "medium"),
+                ("digest --date <the day before>", "step back a day", "low"),
             ]
         else:
-            steps.append(("digest --date today", "today's stories with a one-line summary each"))
-        steps += [
-            ('search "<topic from a headline above>"',
-             "internal before external: confirm what the newsroom already has before you write"),
-        ]
+            steps.append(("digest --date today", "today's stories with a one-line summary each",
+                          "medium" if steps else "high"))
+        steps += [('search "<topic from a headline above>"',
+                   "internal before external: confirm what the newsroom already has before you write", "medium")]
         return steps
     if mode == "check":
         if not has_key:
             return [(f"set {KEY_ENV}, then re-run `check`",
-                     "digest, topics and tags work without a key; the rest report their reach once one is set")]
+                     "the public modes work without a key; the rest report their reach once one is set", "high"),
+                    ("digest", "works now, with no key", "medium")]
         # Read the probe results rather than assuming they passed. This block
         # used to congratulate the reader on reaching search immediately after
         # every request had been refused.
@@ -638,120 +696,153 @@ def _skill_next_steps(mode, args, has_key, state=None) -> list:
         rejected = [v for v in surfaces.values() if str(v).startswith("rejected")]
         if rejected and not (reached - {"digest (public)"}):
             return [("replace the key, then re-run `check`",
-                     "every keyed request was refused, so there is nothing to try until it works"),
-                    ("digest", "digest needs no key and still works")]
+                     "every keyed request was refused, so there is nothing to try until it works", "high"),
+                    ("digest", "digest needs no key and still works", "medium")]
         steps = []
         if "search" in reached:
-            steps.append(('search "<topic>"', "your key reached search; start there"))
-            steps.append(('angles "<topic>" --intent similar', "or work a story across the five Ws"))
-        if "calendar (events)" in reached:
-            steps.append(("events --days 14", "your key reached the calendar; see what is coming up"))
-        elif surfaces.get("calendar (events)") == "OK (public)":
-            steps.append(("events --days 14", "the calendar needs no key; see what is coming up"))
+            steps.append(('search "<topic>"', "your key reached search; start there", "high"))
+            steps.append(('angles "<topic>" --intent similar', "or work a story across the five Ws", "medium"))
+        if "calendar (events)" in reached or surfaces.get("calendar (events)") == "OK (public)":
+            steps.append(("events --days 14", "the calendar needs no key; see what is coming up", "medium"))
         if not steps:
-            steps.append(("digest", "the keyed surfaces did not answer; digest needs no key"))
+            steps.append(("digest", "the keyed surfaces did not answer; digest needs no key", "high"))
         return steps[:5]
     if mode == "search":
-        return [
-            ("article <id from a result above>", "open a match's full body to quote (hold What: this is your story)"),
-            ('rag "<same topic>"', "expand What+Why across time, ignore When: prior coverage + precedent"),
-            ('angles "<topic>" --intent similar', "widen into discovery: fix two Ws, expand the rest"),
-            ('search "<topic>" --corpus transcripts', "shift to the public record (the When/Where axis)"),
-        ]
+        aid, sid = _hit(resp, "articles"), _hit(resp, "transcripts", "source_id")
+        steps = [(f"article {_or(aid, '<id from a result above>')}",
+                  "open the top match's full body before you quote it", "high")]
+        if sid:
+            steps.append((f"transcript {sid}", "the whole meeting the top transcript match came from", "medium"))
+        steps += [('rag "<same topic>"', "expand What+Why across time, ignore When: prior coverage + precedent", "medium"),
+                  ('angles "<topic>" --intent similar', "widen into discovery: fix two Ws, expand the rest", "low")]
+        return steps
     if mode == "article":
-        return [
-            ('rag "<this article\'s topic>"', "gather supporting quotes and prior coverage (What+Why, varying When)"),
-            ('angles "<topic>" --intent track', "work the actor as a beat: fix Who+What, expand When"),
-            ('search "<a related angle>"', "find sibling stories to cite as 'previously reported'"),
-        ]
+        ref = _safe(getattr(args, "ref", None))
+        steps = []
+        if ref:
+            steps.append((f"clips --article {ref}", "the quotable video clips cut from this story's sources", "medium"))
+        steps += [('search "<a related angle>"', "find sibling stories to cite as 'previously reported'", "high"),
+                  ('rag "<this article\'s topic>"', "gather supporting quotes and prior coverage", "medium"),
+                  ('angles "<topic>" --intent track', "work the actor as a beat: fix Who+What, expand When", "low")]
+        return sorted(steps, key=lambda s: ("high", "medium", "low").index(s[2]))
     if mode == "transcript":
-        return [('search "<meeting topic>" --corpus articles', "find the article(s) that covered this meeting"),
-                ("events", "the When axis: what other public meetings are upcoming"),
-                ('angles "<meeting topic>" --intent local', "fix Where+What: the local landscape around it")]
+        sid = _safe(getattr(args, "source_id", None))
+        return [('search "<meeting topic>" --corpus articles', "find the article(s) that covered this meeting", "high"),
+                (f"clips --transcript {_or(sid, '<source id>')}",
+                 "the clips already cut from this meeting, each with a download URL", "medium"),
+                ("events", "what other public meetings are coming up", "low")]
     if mode == "events":
         return [('search "<an event\'s topic>" --corpus articles,transcripts',
-                 "get the coverage and the record for a specific event"),
-                ('angles "<topic>" --intent track', "fix Who+What on the convening body; expand When")]
+                 "get the coverage and the record for a specific event", "high"),
+                ("events --days 60", "look further ahead: hearings are often noticed weeks out", "medium"),
+                ('angles "<topic>" --intent track', "fix Who+What on the convening body; expand When", "low")]
     if mode == "rag":
-        return [("article <id from a quote's source>", "open the article a quote came from"),
-                ('angles "<topic>" --intent angle', "fix Why+What: who else deploys this framing"),
-                ('search "<topic>"', "widen beyond the RAG hits")]
+        return [("article <id from a quote's source>", "open the article a quote came from, and cite it", "high"),
+                ('search "<topic>"', "widen beyond the RAG hits", "medium"),
+                ('angles "<topic>" --intent angle', "fix Why+What: who else deploys this framing", "low")]
     if mode == "brief":
+        aid, sid, pid = _hit(resp, "articles"), _hit(resp, "transcripts", "source_id"), _hit(resp, "speakers")
         return [
-            ("article <url or id from Prior coverage>", "read what you will cite in full before you cite it"),
-            ("transcript <source id from the record>", "the whole meeting, not just the matching excerpt"),
-            ('person <id from On the record>', "everything a person appears in, marked where they are quoted"),
-            ("events --days 30", "what is still coming up that you could attend or file comment on"),
+            (f"article {_or(aid, '<url or id from Prior coverage>')}", "read what you will cite in full before you cite it", "high"),
+            (f"transcript {_or(sid, '<source id from the record>')}", "the whole meeting, not just the matching excerpt", "medium"),
+            (f"person {_or(pid, '<id from On the record>')}", "everything a person appears in, marked where they are quoted", "medium"),
+            ("events --days 30", "what is still coming up that you could attend or file comment on", "low"),
         ]
     if mode == "angles":
-        # Discovery is nested: one intent fixes two Ws; the next steps expand a
-        # free axis or pivot the fixed pair. Placeholders (not the live seed) match
-        # the house style of the other modes and keep this args-free.
+        aid = _hit(resp, "articles")
         return [
-            ("article <id from a hit above>",
-             "open a match: a SECOND axis agreeing makes it relevant; an independent source makes it confirmed"),
-            ('rag "<seed>"',
-             "expand What+Why across time (ignore When): prior coverage and precedent"),
+            (f"article {_or(aid, '<id from a hit above>')}",
+             "open a match: a SECOND axis agreeing makes it relevant; an independent source makes it confirmed", "high"),
+            ('rag "<seed>"', "expand What+Why across time (ignore When): prior coverage and precedent", "medium"),
             ('angles "<seed>" --intent track   (or: local, precedent, angle)',
-             "pivot the fixed pair: each intent fixes a different two Ws and expands the rest"),
+             "pivot the fixed pair: each intent fixes a different two Ws and expands the rest", "low"),
         ]
     if mode == "people":
-        return [("person <id from a row above>",
-                 "open the actor: their record plus every article that quotes them"),
-                ('angles "<their name>" --intent track',
-                 "work them as a beat: fix Who+What, expand When"),
-                ('search "<their name>" --corpus transcripts',
-                 "hear them in the public record rather than in coverage")]
+        pid = _first(rows)
+        return [(f"person {_or(pid, '<id from a row above>')}",
+                 "open the actor: their record plus every article that quotes them", "high"),
+                ('search "<their name>" --corpus transcripts', "hear them in the public record rather than in coverage", "medium"),
+                ('angles "<their name>" --intent track', "work them as a beat: fix Who+What, expand When", "low")]
     if mode == "person":
-        return [("article <id from the coverage above>",
-                 "open a story the quote came from, to cite it rather than the excerpt"),
-                ('angles "<their name>" --intent track',
-                 "fix Who+What and expand When: the actor as a running beat"),
-                ("browse --tag <a tag from their coverage>",
-                 "widen from the person to the subject they keep appearing in")]
+        aid = _first(rows)
+        pid = _safe(getattr(args, "person_id", None))
+        steps = [(f"article {_or(aid, '<id from the coverage above>')}",
+                  "open a story the quote came from, to cite it rather than the excerpt", "high")]
+        if pid and not getattr(args, "since", None):
+            steps.append((f"person {pid} --since <YYYY-MM-DD>", "only what is new on them since a day", "medium"))
+        steps.append(("browse --tag <a tag from their coverage>",
+                      "widen from the person to the subject they keep appearing in", "low"))
+        return steps
     if mode == "topics":
-        return [("browse --tag <slug from above>", "read what has actually been published on one beat"),
-                ('tags "<word>" --category organization',
-                 "or find the agencies and bodies that coverage is filed under"),
-                ('search "<topic name>"', "or go straight to a query inside the beat")]
+        slug = _first(rows, "slug", slug=True)
+        return [(f"browse --tag {_or(slug, '<slug from above>')}", "read what has actually been published on one beat", "high"),
+                ('tags "<word>" --category organization', "or find the agencies and bodies coverage is filed under", "medium"),
+                ('search "<topic name>"', "or go straight to a query inside the beat", "low")]
     if mode == "tags":
-        return [("browse --tag <slug from above>", "that tag's coverage, newest first"),
-                ("topics", "or step back to the beats, ranked by how much each holds"),
-                ('angles "<tag name>" --intent local', "fix Where+What around it")]
+        slug = _first(rows, "slug", slug=True)
+        return [(f"browse --tag {_or(slug, '<slug from above>')}", "that tag's coverage, newest first", "high"),
+                ("topics", "or step back to the beats, ranked by how much each holds", "medium"),
+                ('angles "<tag name>" --intent local', "fix Where+What around it", "low")]
     if mode == "browse":
-        return [("article <id from a row above>", "open one in full"),
-                ('search "<something you noticed>"',
-                 "switch from what EXISTS to what MATCHES, once you have a lead"),
-                ("browse --sort top --window week",
-                 "or re-cut the same list by what readers actually read")]
+        aid = _first(rows)
+        steps = [] if has_key or getattr(args, "tag", None) else [key_step]
+        steps.append((f"article {_or(aid, '<id from a row above>')}", "open one in full", "high"))
+        tag = _safe(getattr(args, "tag", None), slug=True)
+        if tag and not getattr(args, "since", None):
+            steps.append((f"browse --tag {tag} --since <YYYY-MM-DD>", "only what is new on this beat since a day", "medium"))
+        steps += [('search "<something you noticed>"', "switch from what EXISTS to what MATCHES, once you have a lead", "medium"),
+                  ("browse --sort top --window week", "or re-cut the list by what readers actually read", "low")]
+        return steps
     if mode == "communities":
-        return [('search "<topic>" --community <slug from above>',
-                 "point the read surface at a specific community"),
-                ("digest", "or stay on the default community's recent stories")]
+        slug = _first(rows, "slug", slug=True)
+        return [(f'search "<topic>" --community {_or(slug, "<slug from above>")}',
+                 "point the read surface at a specific community", "high"),
+                ("digest", "or stay on the default community's recent stories", "low")]
     if mode == "clip":
-        return [("transcript <source-id>", "read the full transcript the clip was cut from"),
-                ("curl -o clip.mp4 '<the url above>'", "the id resolves to a public MP4; nothing here downloads it")]
+        return [("transcript <the clip's source id>", "read the whole meeting the clip was cut from", "high"),
+                ("curl -o clip.mp4 '<the url above>'", "the id resolves to a public MP4; nothing here downloads it", "medium")]
+    if mode == "clips":
+        cid, sid = _first(rows), _first(rows, "source_id")
+        steps = [] if has_key else [key_step]
+        steps += [(f"transcript {_or(sid, '<source id>')}", "read the quote in the whole meeting before you use it", "high"),
+                  (f"clip {_or(cid, '<clip id>')}", "resolve one clip to its MP4 URL to download or embed it", "medium")]
+        if getattr(args, "article", None) and sid:
+            steps.append((f"clips --transcript {sid}", "every clip from that meeting, not only this story's", "low"))
+        return steps
+    if mode == "near":
+        aid = (state or {}).get("nearest")
+        return [(f"article {_or(aid, '<id from a story above>')}", "read the nearest story in full", "high"),
+                ('search "<a place name from above>"', "older coverage of the place: this pool covers only recent stories", "medium"),
+                ("events --days 14", "what is coming up, to read alongside what just happened", "low")]
     return []
 
 
 def _print_hateoas(mode, args, resp=None, state=None):
     """The CLI HATEOAS footer: surface the server's next_steps, then this skill's,
-    then related modes + see-also. Never called in --json mode (machine consumers
-    read next_steps from the payload)."""
+    then related modes + see-also. In --json mode, `_json_next_steps` prints the
+    same steps to stderr as JSON instead."""
     has_key = bool(read_key())
     server = _server_next_steps(resp)
     if server:
         print("\nThe API points onward to:")
         for s in server[:5]:
             print(f"  {s}")
-    steps = _skill_next_steps(mode, args, has_key, state)
+    steps = _skill_next_steps(mode, args, has_key, state, resp)
     if steps:
         print("\nNext steps:")
-        for action, why in steps[:5]:
-            print(f"  {action}")
+        for i, (action, why, prio) in enumerate(steps[:5], 1):
+            print(f"  {i}. [{prio}] {action}")
             print(f"      {why}")
     print(f"\nRelated modes: {RELATED_MODES}")
     print(f"See also: {see_also()}")
+
+
+def _json_next_steps(mode, args, resp=None, state=None):
+    """--json keeps stdout the untouched payload, so this skill's next steps go to
+    stderr as one JSON line, structured for a machine: command, reason, priority."""
+    steps = _skill_next_steps(mode, args, bool(read_key()), state, resp)[:5]
+    print(json.dumps({"next_steps": [{"command": a, "reason": w, "priority": p}
+                                     for a, w, p in steps]}, ensure_ascii=False), file=sys.stderr)
 
 
 # --- helpers ----------------------------------------------------------------
@@ -820,8 +911,16 @@ def _guided(fn):
                 "  Why: usually a proxy or captive portal answering instead of the API.\n"
                 f"  Recovery: confirm you can reach {site_host()}, then re-run `check`."
             )
+        if e.code == 404:
+            sys.exit(
+                "Not found (404).\n"
+                "  Why: no such id or slug, or it is not public (an unpublished story, a hidden meeting,\n"
+                "  a person without a public page when no key is sent).\n"
+                "  Recovery: copy the id from `search`, `browse`, `people` or `clips` output, exactly.\n"
+                "  If it came from another newsroom, add --community <slug> (`communities` lists them).")
         if e.code == 429:
-            sys.exit("Rate limited (429). Recovery: back off ~a minute; the API allows 300 reads/min per user.")
+            sys.exit("Rate limited (429). Why: the API allows 300 reads a minute per user.\n"
+                     "  Recovery: wait about a minute and re-run; nothing was written, so a retry is safe.")
         raise
 
 
@@ -848,16 +947,18 @@ def _print_json(obj, origin=None, **dumps):
     print(terms_note(origin), file=sys.stderr)
 
 
-def _emit(obj, args, render=None, mode=""):
+def _emit(obj, args, render=None, mode="", state=None):
     """Single output point for keyed modes. JSON: valid JSON only (its own
     next_steps are the HATEOAS for machines). Markdown: rendered data + the CLI
     HATEOAS footer + the license reminder."""
     if args.json:
         _print_json(obj, indent=2)
+        if mode:
+            _json_next_steps(mode, args, obj, state)
         return
     print(_fence(render(obj) if render else json.dumps(obj, indent=2, ensure_ascii=False)))
     if mode:
-        _print_hateoas(mode, args, obj)
+        _print_hateoas(mode, args, obj, state)
     print(f"\n---\n{terms_note()}")
 
 
@@ -1021,6 +1122,7 @@ def cmd_digest_day(args):
         _print_json({"date": day.isoformat(), "time_zone": tz_name, "stories": stories,
                      "pages": resp.get("pages"), "complete": resp.get("complete"),
                      "note": " ".join(x for x in (tz_note, note) if x)})
+        _json_next_steps("digest", args)
         return
     name = urllib.parse.urlsplit(site()).netloc or site()
     for r in rows:
@@ -1181,6 +1283,7 @@ def cmd_digest(args):
     md = fetch_markdown(site() + "/")
     if args.json:
         _print_json({"markdown": md})
+        _json_next_steps("digest", args)
         return
     print(_fence(md))
     _print_hateoas("digest", args, None)
@@ -1205,6 +1308,7 @@ def cmd_article(args):
         origin = f"{parts.scheme}://{parts.netloc}"
         if args.json:
             _print_json({"markdown": fetch_markdown(url)}, origin)
+            _json_next_steps("article", args)
             return
         print(_fence(fetch_markdown(url)))
         _print_hateoas("article", args, None)
@@ -1524,6 +1628,7 @@ def cmd_clip(args):
     if args.json:
         _print_json({"clip_id": args.clip_id, "stream_url": url,
                      "status": r.get("status")}, indent=2)
+        _json_next_steps("clip", args)
         return
     if url:
         print(f"# clip {args.clip_id}\n{url}")
@@ -1678,7 +1783,15 @@ def cmd_near(args):
             out.append(f"({unplaced} with no coordinates left out)")
         return "\n".join(out)
 
-    _emit(resp, args, render, mode="near")
+    nearest = None
+    for a in sorted((a for a in _rows(resp) if not _is_statewide(a)
+                     and isinstance(a.get("latitude"), (int, float))
+                     and isinstance(a.get("longitude"), (int, float))),
+                    key=lambda a: _miles(lat, lon, a["latitude"], a["longitude"])):
+        if args.radius is None or _miles(lat, lon, a["latitude"], a["longitude"]) <= args.radius:
+            nearest = _safe(a.get("id"))
+        break
+    _emit(resp, args, render, mode="near", state={"nearest": nearest})
 
 
 def cmd_communities(args):
@@ -1814,6 +1927,7 @@ def cmd_person(args):
         cov = coverage(args.offset, args.limit)
     if args.json:
         _print_json({"person": who, "articles": cov}, indent=2)
+        _json_next_steps("person", args, cov)
         return
     # GET /persons/<id> nests the record under data.speaker (alongside data.aliases),
     # unlike the list endpoint which returns person objects directly.
@@ -2288,6 +2402,7 @@ def cmd_check(args):
 
     if args.json:
         _print_json(result, indent=2)
+        _json_next_steps("check", args, state=result)
         return
 
     print(f"reachability: {host}, community {args.community}\n")

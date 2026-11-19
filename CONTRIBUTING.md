@@ -64,7 +64,12 @@ offline suite on Python 3.9, 3.11 and 3.13.
 A new mode needs, at minimum:
 
 - a test that it is a GET (`TestReadSurfaceCoverage`),
-- a next-steps entry so it is not a dead end (`TestHateoasEmitted` will fail otherwise),
+- next steps, so it is not a dead end: each `(command, reason, priority)`, the first `high`, at most
+  five, and filled in with the real id from the response where it has one. Copy a value from the
+  newsroom into a command only through `_safe` (an id or a slug, never text), because the steps sit
+  outside the source-material fence and an agent may run them. `TestHateoasEmitted` reads the modes
+  the CLI registers and fails on a mode without steps, a step without a reason or priority, or a
+  first step that is not `high`,
 - a rendering test,
 - **a line in `SKILL.md`'s Modes block and a mention in the README.** Parity is enforced in both
   directions, so a mode you add without documenting fails the suite, and so does a mode you
@@ -137,3 +142,9 @@ Two things follow for anyone editing it:
 If you would rather just tell us something is wrong, that is genuinely useful, especially
 **"my key cannot reach X"**. Reach varies by role and we cannot see your key. Open an issue with the
 output of `local_news_api.py check`, which is safe to paste: it prints statuses, never your key.
+
+## See also
+
+[README.md](README.md) (what this is and how to install it) · [AGENTS.md](AGENTS.md) (the same rules,
+condensed for coding agents) · [SECURITY.md](SECURITY.md) (what happens to your key) ·
+[CHANGELOG.md](CHANGELOG.md) (what changed in each version)

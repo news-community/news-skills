@@ -1,9 +1,11 @@
-# Dates, `events`, `near` and `clips`: how they work and where they stop
+# Dates, `events`, `near`, `clips` and `person`: how they work and where they stop
+
+**Parent:** [`SKILL.md`](../SKILL.md) · **Siblings:** [angles](angles.md) · [output](output.md) · [verification](verification.md)
 
 Moved out of `SKILL.md` on 2026-11-19 to keep the body an agent loads on every run inside its budget.
 
-**Read this when** you filter by date, list upcoming events, look for stories near a place, or need
-clip ids.
+**Read this when** you filter by date, list upcoming events, look for stories near a place, need
+clip ids, or attribute words to someone `person` lists.
 
 **The When axis: `--since` / `--until`.** `search` and `angles` both take `--since YYYY-MM-DD` and
 `--until YYYY-MM-DD`, which map to the API's `date_from` / `date_to` on the articles corpus. This is
@@ -56,3 +58,11 @@ not start or end mid-word.
 **Reach:** both answer 401 without a key (checked 2026-11-19), and the platform's code checks only
 that the key covers the community, with no role. That is what the code permits; **no ordinary key
 has run it yet**, so treat the reach row as unverified until one does (see `verification.md`).
+
+## `person`: appears in, not quoted in
+
+The distinction is load-bearing. `/persons/<id>/articles` returns a UNION: articles where an attribution matched the person's name,
+and articles structurally linked to them. Only the first kind carries a verbatim excerpt. Rows with a
+quote are marked `quoted (Nx)`; when a whole page has none, the client says so, because "Dunleavy
+appears in this piece" and "Dunleavy said this in this piece" are different claims and only one of
+them is quotable. Open the article and confirm before you attribute words to anyone.

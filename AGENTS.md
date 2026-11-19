@@ -78,6 +78,11 @@ Break one of these and the suite fails, deliberately.
   `PLATFORM_API_BASE`, because that directory belongs to whatever project the skill runs in.
 - **Usage terms are read from the newsroom on every run**, never compiled in, and when they
   cannot be read the output says so.
+- **Every output says where to go next (HATEOAS).** Each mode of the client, and each task skill,
+  ends with next steps: a command, its reason and a priority, the first one `high`, at most five,
+  filled in with real ids from the response. Values from the newsroom enter a command only if shaped
+  like an id or a slug. `--json` keeps stdout the payload and puts the steps on stderr. Errors say
+  why and what to try. The tests read the registered modes, so a new mode cannot skip this.
 - **The User-Agent is `<name>/<version>`** from the frontmatter, checked by a test.
 
 ## Rules that no test can enforce
@@ -104,3 +109,8 @@ or delete anything on a registry**, even when you have the credentials to.
 Never commit a key; `.env` and `.env.local` are git-ignored. Report a vulnerability privately
 through the Security tab ("Report a vulnerability"), as [SECURITY.md](SECURITY.md) describes, not in
 a public issue.
+
+## See also
+
+[README.md](README.md) · [CONTRIBUTING.md](CONTRIBUTING.md) (the longer version of these rules) ·
+[SECURITY.md](SECURITY.md) · [CHANGELOG.md](CHANGELOG.md) · each skill's `SKILL.md` under `skills/`

@@ -6,6 +6,30 @@ The skill declares a `version` under `metadata` in
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Dates are the day the work
 landed on `main`.
 
+## local-news-api 1.8.0, meeting-prep 0.2.0 and cite-check 0.2.0 - 2026-11-19
+
+### Changed
+
+- **Every next step carries a priority.** Steps print as `1. [high] <command>` with their reason,
+  highest first, at most five, and the first is always `high`, so there is one place to start.
+- **Next steps name the real thing.** A step opens the actual article, transcript, person, clip or
+  tag from the output, so it runs as printed; a placeholder is left only when the output had none.
+  Only values shaped like an id or a slug are copied in, never a story's text, because the steps sit
+  outside the source-material fence and an agent may run them.
+- **`--json` carries the next steps too**, on stderr as one JSON line (`command`, `reason`,
+  `priority`), so stdout stays the payload.
+- **`meeting-prep` and `cite-check` end with Next steps, Related skills and See also.** With no key,
+  getting one leads; with nothing matched, widening the search does; a quotation not found gets a
+  search for its own words; `cite-check --dry-run` ends with the command for the real check.
+
+### Fixed
+
+- **`clips` and `near` had no next steps**, so both ended in a dead end. The HATEOAS test read a
+  hand-kept list of modes that did not include them; it now reads the modes the CLI registers.
+- **`digest` with a key had no high-priority step.**
+- **A 404 now says why and what to try** (the id may not exist or not be public; copy it from
+  `search`, `browse`, `people` or `clips`), instead of the generic API error.
+
 ## meeting-prep 0.1.0 and cite-check 0.1.0 - 2026-11-19
 
 Two new skills, built on the Local News API client, which each ships as a byte-identical copy

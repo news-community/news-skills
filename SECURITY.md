@@ -110,3 +110,9 @@ privately here and it will be routed.
   hand-written copy in the first place.
 - Rate limiting (300 reads/min). A 429 is a back-off, not a flaw.
 - Content of the reporting retrieved through the API. Corrections belong with the newsroom.
+
+## See also
+
+[README.md](README.md) (what the skills are) · [CONTRIBUTING.md](CONTRIBUTING.md) (the read-only
+rule and how it is enforced) · [AGENTS.md](AGENTS.md) · the reach table in
+[`skills/local-news-api/SKILL.md`](skills/local-news-api/SKILL.md) (which modes send the key)

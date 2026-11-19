@@ -16,7 +16,7 @@ compatibility: >-
   COMMUNITIES_NEWS_API_KEY; checking against transcripts needs a subscriber's key.
 allowed-tools: Bash
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   author: Communities News, Inc.
   homepage: https://communities.news
   repository: news-community/news-skills
@@ -89,7 +89,11 @@ For an **article** match, the words are the newsroom's published text. If they a
 rather than a quotation it carried, attribute them to the newsroom.
 
 The report ends with a **Citations** list: title, newsroom, date and URL for articles; speaker,
-meeting, timestamp and URL for transcripts.
+meeting, timestamp and URL for transcripts. Then **Next steps**: commands to run next, highest
+priority first, each with its reason and marked `high`, `medium` or `low`. A speaker mismatch or
+a quotation not found leads the list; a not-found quotation gets a search command with its own
+words filled in. `--dry-run` ends with the command that runs the real check. `--json` puts the same
+steps on stderr as JSON, beside the terms, and keeps stdout the report.
 
 ## How it decides
 
@@ -152,3 +156,13 @@ re-implemented.
 - **Transcripts are machine transcriptions.** A VERBATIM match to a transcript means the
   transcript says so; for a quote that matters, listen at the linked timestamp.
 - **It reads quotations, not paraphrase.** A claim without quotation marks is not checked.
+
+## Related skills
+
+- **`local-news-api`**: the full client this skill is built on, shipped here as
+  `scripts/local_news_api.py`. Run `python3 scripts/local_news_api.py check` to see what your key
+  reaches, or any of its modes directly.
+- **`meeting-prep`**: a public meeting's calendar entry, official notice, coverage so far and what was said before.
+
+Both live in [news-skills](https://github.com/news-community/news-skills), with the changelog and
+how to install them.
