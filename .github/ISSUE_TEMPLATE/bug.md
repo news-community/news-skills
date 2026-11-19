@@ -8,7 +8,7 @@ labels: bug
 **Command:**
 
 ```
-python3 skills/local-news-api/scripts/local_news_api.py ...
+python3 skills/<skill>/scripts/<script>.py ...   (for example local_news_api.py, meeting_prep.py, cite_check.py)
 ```
 
 **What happened** (paste the output; add `--json` if the rendering looks wrong, since that shows the

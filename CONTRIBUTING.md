@@ -4,7 +4,8 @@ Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT
 agents: start with [AGENTS.md](AGENTS.md).
 
 Thanks for looking. This repo shares tools that external creators can point at a Communities News
-newsroom API, alaskanews.com by default. Contributions are welcome, with one hard rule and one
+newsroom API, alaskanews.com by default: the `local-news-api` client, and two task skills built on
+it, `meeting-prep` and `cite-check`. Contributions are welcome, with one hard rule and one
 habit.
 
 ## The hard rule: this stays read-only
@@ -16,6 +17,9 @@ will not be merged:
 - `TestReadOnlyContract` in the test suite, which reads the source and fails on a write verb.
 - A grep in CI, which runs even if the module fails to import (a test that cannot load is a test
   that cannot fail).
+
+The task skills are stricter still: they make GET requests only, not even the client's read-only
+`POST`, and CI greps for that too.
 
 Publishing *into* the newsroom is a separate, editor-authenticated workflow. It does not belong
 here, however convenient it would be.
@@ -45,7 +49,13 @@ So if you add or change a mode, or write anything about what an endpoint returns
 ```bash
 pip install pytest
 python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
+python3 -m pytest skills/meeting-prep/scripts skills/cite-check/scripts tests -q
 ```
+
+**Changed the client? Run `sh scripts/sync-shared-client.sh` and commit the copies with it.**
+`meeting-prep` and `cite-check` each ship a byte-identical copy of
+`skills/local-news-api/scripts/local_news_api.py`, because an installed skill has only its own
+folder, and `tests/test_skill_spec.py` fails when a copy differs.
 
 Offline: no key, no network (HTTP is pointed at a closed port, so a test that needs the network
 fails). `LOCAL_NEWS_API_LIVE=1` adds the few `live` tests that call the real site. CI runs the
@@ -77,9 +87,10 @@ this repo is mostly prose about a program and the temptation recurs.
 
 ## SKILL.md is a spec document, and the tests treat it as one
 
-`skills/local-news-api/SKILL.md` follows the [Agent Skills
-specification](https://agentskills.io/specification), and `TestSkillMdMeetsTheSpec` asserts its
-constraints: `name` lowercase-and-hyphens under 64 characters, `description` non-empty and under
+Every `SKILL.md` here follows the [Agent Skills
+specification](https://agentskills.io/specification). For `skills/local-news-api/SKILL.md`,
+`TestSkillMdMeetsTheSpec` asserts its constraints, and `tests/test_skill_spec.py` holds the two task
+skills to the same ones: `name` lowercase-and-hyphens under 64 characters, `description` non-empty and under
 1024, `compatibility` under 500, `metadata` a flat map of strings to strings, and a declared
 `license` that matches the bundled `LICENSE` file.
 

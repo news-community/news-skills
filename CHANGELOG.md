@@ -50,8 +50,9 @@ version numbers below this section are `local-news-api`'s.
 
 ### Fixed
 
-- **`browse --tag` and the coverage half of `person` no longer send the key.** Both routes are
-  public (200 and 404 without a key on 2026-11-19); the person record still needs one.
+- **`browse --tag` no longer sends the key.** `/tags/<slug>/articles` is public (200 without a key
+  on 2026-11-19), and a key only narrows it. `person` still sends the key for its coverage call: that
+  route answers anonymously only for people with a public page, and a key reaches anyone.
 
 ## 1.6.4 - 2026-11-19
 

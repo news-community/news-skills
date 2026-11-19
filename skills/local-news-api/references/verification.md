@@ -44,7 +44,9 @@ support say so.
 
 - **Public, verified keyless:** `/calendar` (200 with events), `/transcript/<id>/chunks` (404, not
   401, for an unknown id), `/tags/<slug>/articles` (200), `/persons/<id>/articles` (404, not 401) and
-  `/feed/nearby` (200, 200 stories, every one with coordinates).
+  `/feed/nearby` (200, 200 stories, every one with coordinates). `/persons/<id>/articles` answers
+  without a key too, but only for a person with a public page (the platform's route), so `person`
+  still sends the key; a keyless 404 for an unknown id does not show the route is fully public.
 - **Keyed, verified keyless:** `/articles/<id>/clips` and `/transcript/<id>/clips` answer 401
   without a key. The platform's code checks only that the key covers the community. **Reach with an
   ordinary key is unverified**; the first person to run `clips` with one should record it here.

@@ -2522,7 +2522,9 @@ class TestSinceFilter:
         out = capsys.readouterr().out
         assert "Story 3" in out and "Story 4" not in out
         art = [c for c in rec.calls if c["path"].endswith("/articles")]
-        assert art and all(c["public"] for c in art), "persons/<id>/articles is public"
+        assert art and not any(c["public"] for c in art), (
+            "persons/<id>/articles answers anonymously only for people with a public page; "
+            "a key is answered for anyone, so the key must be sent")
 
     def test_since_takes_today_and_yesterday_and_names_its_own_flag(self, monkeypatch):
         with pytest.raises(SystemExit) as e:

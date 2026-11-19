@@ -4,7 +4,7 @@ description: >-
   Use when someone asks what a local newsroom has published, is about to cover, or has
   reported before: what happened at a public meeting, when the next hearing or comment
   deadline falls, who said something on the record, what prior coverage exists to cite, what it
-  published on a given day, or what to gather before writing a story.
+  published on a given day or near a place, or what to gather before writing a story.
   Reads published articles, meeting transcripts with speakers and timestamps, upcoming civic
   events, a people directory, beats and traceable prior-coverage citations from a Communities
   News newsroom's public API, for example Alaska News at alaskanews.com (the default).
@@ -15,8 +15,8 @@ description: >-
 license: MIT-0
 compatibility: >-
   Python 3.9+, standard library only, no third-party packages. Needs network access to a
-  Communities News newsroom (alaskanews.com unless NEWS_SITE says otherwise) and, for most
-  modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
+  Communities News newsroom (alaskanews.com unless NEWS_SITE says otherwise) and, for the
+  keyed modes, that newsroom's own cn_ API key in COMMUNITIES_NEWS_API_KEY.
 allowed-tools: Bash
 metadata:
   version: "1.7.0"
@@ -26,7 +26,7 @@ metadata:
   openclaw: {"primaryEnv": "COMMUNITIES_NEWS_API_KEY", "requires": {"bins": ["python3"]},
     "homepage": "https://communities.news",
     "envVars": [
-      {"name": "COMMUNITIES_NEWS_API_KEY", "required": false, "description": "Your cn_ key. digest, events, transcript, topics and tags run without it."},
+      {"name": "COMMUNITIES_NEWS_API_KEY", "required": false, "description": "Your cn_ key. The public modes (digest, events, transcript, near, topics, tags) run without it."},
       {"name": "NEWS_DESK_API_KEY", "required": false, "description": "Older name for the key, still read."},
       {"name": "ALASKA_DESK_API_KEY", "required": false, "description": "Oldest name for the key, still read."},
       {"name": "NEWS_SITE", "required": false, "description": "Newsroom origin; default https://alaskanews.com."},
@@ -58,7 +58,7 @@ part of this tool.
 | **Audience** | community journalists, bloggers, civic writers; one key each |
 | **Direction** | READ ONLY. No `PATCH` / `PUT` / `DELETE`; its only `POST` is the read-only RAG query. A test enforces this. |
 | **Local files** | none unless you ask: `brief --out FILE` saves the brief as Markdown at the path you give, **replacing** a file already there. Nothing else writes to disk. A test enforces this too. |
-| **Auth** | **your own** `cn_` API key (`COMMUNITIES_NEWS_API_KEY`), ideally created **read-only**. `digest`, `topics` and `tags` need none. |
+| **Auth** | **your own** `cn_` API key (`COMMUNITIES_NEWS_API_KEY`), ideally created **read-only**. The public modes in the reach table below need none. |
 | **Output** | rendered markdown by default (paste into your draft), `--json` for raw. The site's usage terms come with every response: under the markdown, and on stderr with `--json` so stdout stays valid JSON. |
 | **Newsroom** | alaskanews.com (`/api/v1`) by default, a DEFAULT not a limit: `NEWS_SITE` + `NEWS_COMMUNITY` point it elsewhere. |
 | **Runs on** | [`scripts/local_news_api.py`](scripts/local_news_api.py), Python 3, standard library only, no dependencies. |

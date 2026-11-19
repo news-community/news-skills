@@ -17,7 +17,7 @@ spec `https://alaskanews.com/api/v1/openapi.json`. It is published on ClawHub as
 skills/local-news-api/
   SKILL.md                    the skill: YAML frontmatter + instructions an agent loads every run
   agents/openai.yaml          the name and summary a skill catalog shows (not the agent's trigger)
-  references/verification.md  loaded on demand, not on every run
+  references/*.md             loaded on demand, not on every run (modes, angles, output, verification)
   scripts/local_news_api.py   the client: one file, Python 3.9+, standard library only
   scripts/test_local_news_api.py   the offline suite (kept out of the registry bundle)
   .clawhubignore              what a registry does not receive
@@ -46,6 +46,7 @@ python3 skills/local-news-api/scripts/local_news_api.py digest    # recent stori
 python3 skills/local-news-api/scripts/local_news_api.py topics    # beats ranked by coverage, no key
 pip install pytest
 python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q
+python3 -m pytest skills/meeting-prep/scripts skills/cite-check/scripts tests -q
 ```
 
 The suite is **offline**: no key and no network. Every test runs with HTTP(S) sent to a closed
@@ -92,8 +93,10 @@ Break one of these and the suite fails, deliberately.
 
 ## Releases
 
-A release bumps `metadata.version` in `SKILL.md` (the User-Agent follows it) and adds a
-`CHANGELOG.md` entry. **Publishing to ClawHub is done by the maintainers. Do not publish, rename
+Each skill has its own version. A release bumps that skill's `metadata.version` in its `SKILL.md`
+(the client's User-Agent follows `local-news-api`'s) and adds a `CHANGELOG.md` entry naming the
+skill. A client release also runs `sh scripts/sync-shared-client.sh`, so the task skills ship the
+same client. **Publishing to ClawHub is done by the maintainers. Do not publish, rename
 or delete anything on a registry**, even when you have the credentials to.
 
 ## Security

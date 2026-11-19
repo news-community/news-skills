@@ -1794,11 +1794,14 @@ def cmd_person(args):
     in this piece" are different claims and only one of them is quotable."""
     pid = _seg(args.person_id, "person id")
     who = _guided(lambda: api_request("GET", f"/persons/{pid}"))
-    # /persons/<id>/articles answers without a key (platform: requireAuth false),
-    # so only the record call carries one.
+    # /persons/<id>/articles answers without a key, but only for a person with a
+    # public page: to an anonymous caller anyone else is a 404, while a key is
+    # answered for any person (platform route, `isPublicPerson`). So the key buys
+    # something here and is sent. 1.7.0 briefly sent none, which broke `person`
+    # for exactly the people a key reaches and the public site does not.
     def coverage(off, lim):
         return _guided(lambda: api_request(
-            "GET", f"/persons/{pid}/articles", {"limit": lim, "offset": off}, public=True))
+            "GET", f"/persons/{pid}/articles", {"limit": lim, "offset": off}))
 
     since_out = None
     if getattr(args, "since", None):

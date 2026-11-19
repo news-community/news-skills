@@ -19,8 +19,8 @@ nobody reads.
 
 ## What this does about it
 
-One read-only client over a newsroom's public API, with sixteen modes covering what is
-published, what is coming up, who said it, and what was reported before. Every output ends
+One read-only client over a newsroom's public API, with eighteen modes covering what is
+published, what is coming up, what happened nearby, who said it, and what was reported before. Every output ends
 with where to go next, and carries the newsroom's **own** machine-readable usage terms,
 fetched at run time rather than compiled in, so the tool cannot print one newsroom's terms
 over another's reporting.
@@ -42,7 +42,7 @@ ask: `brief --out FILE`, and `--out FILE` in the other two, replacing a file alr
 
 ## Install
 
-This is an [Agent Skills](https://agentskills.io) skill, so installing it means putting the
+These are [Agent Skills](https://agentskills.io) skills, so installing one means putting its
 skill directory where your agent looks for skills.
 
 **From ClawHub**, where it is published as
@@ -114,11 +114,15 @@ python3 skills/local-news-api/scripts/local_news_api.py brief "port of alaska" -
 # 5. What can you still show up to, or still file comment on?
 python3 skills/local-news-api/scripts/local_news_api.py events --days 14
 
-# 6. Work an actor, or a beat:
+# 6. Work an actor, or a beat, and what is new on it since a day:
 python3 skills/local-news-api/scripts/local_news_api.py people "dunleavy"
-python3 skills/local-news-api/scripts/local_news_api.py browse --tag transportation
+python3 skills/local-news-api/scripts/local_news_api.py browse --tag transportation --since 2026-11-16
 
-# 7. Get ready for a meeting, or check the quotes in a draft:
+# 7. Recent stories nearest a point (no key), and the quotable clips from an article:
+python3 skills/local-news-api/scripts/local_news_api.py near 61.22,-149.90 --radius 25
+python3 skills/local-news-api/scripts/local_news_api.py clips --article <article-id>
+
+# 8. Get ready for a meeting, or check the quotes in a draft:
 python3 skills/meeting-prep/scripts/meeting_prep.py "port of alaska"
 python3 skills/cite-check/scripts/cite_check.py draft.md --dry-run
 ```
@@ -135,9 +139,9 @@ Python 3, standard library only. No dependencies to install for the tool itself.
 
 ## Built on the Agent Skills standard
 
-`skills/local-news-api/` follows the [Agent Skills specification](https://agentskills.io/specification):
+Every skill here follows the [Agent Skills specification](https://agentskills.io/specification):
 a directory containing a `SKILL.md` of YAML frontmatter plus Markdown instructions, with an
-optional `scripts/` beside it.
+optional `scripts/` beside it. The layout of `skills/local-news-api/`:
 
 ```
 skills/local-news-api/
@@ -223,7 +227,7 @@ useful: it prints statuses, never your key.
 ## Changelog
 
 [`CHANGELOG.md`](CHANGELOG.md) records what changed in each version, and is what the `version`
-in the skill's frontmatter refers to.
+in each skill's frontmatter refers to. Each skill has its own version.
 
 ## License
 

@@ -5,6 +5,9 @@
 ## Checklist
 
 - [ ] `python3 -m pytest skills/local-news-api/scripts/test_local_news_api.py -q` passes.
+- [ ] `python3 -m pytest skills/meeting-prep/scripts skills/cite-check/scripts tests -q` passes.
+- [ ] If this changes `skills/local-news-api/scripts/local_news_api.py`: I ran
+      `sh scripts/sync-shared-client.sh` and committed the copies.
 - [ ] Still read-only: no `PATCH`/`PUT`/`DELETE`, and no new `POST` beyond `/rag/query`.
 - [ ] If this fixes a defect, I added the test that would have caught it, and checked it **fails**
       without the fix.
